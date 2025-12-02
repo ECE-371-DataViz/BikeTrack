@@ -2,3 +2,9 @@ streamlit
 streamlit-folium
 shapely
 folium
+googlemaps
+polyline
+geopy
+redis
+pandas
+requests
