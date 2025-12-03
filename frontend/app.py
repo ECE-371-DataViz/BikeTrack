@@ -284,7 +284,8 @@ def add_routes_to_map(m, directions, stations_df, selected_route=None, station_t
         path = [(lat, lon) for lon, lat in coords_list]
         all_paths.append(path)
 
-    total_stations = 0
+    # Track unique stations to avoid double-counting across routes
+    unique_stations = set()
 
     # Per-route statistics
     route_stats = []
@@ -331,10 +332,12 @@ def add_routes_to_map(m, directions, stations_df, selected_route=None, station_t
         # Show stations for selected route, or all routes if none selected
         show_route = (selected_route is None) or (selected_route == idx)
         if show_route and not route_stations.empty:
-            # Update totals
-            total_stations += route_station_count
-            # Draw stations in white
+            # Track unique stations across all shown routes
             for _, srow in route_stations.iterrows():
+                station_id = str(srow.get('station_id', ''))
+                unique_stations.add(station_id)
+                
+                # Draw stations in white
                 folium.CircleMarker(
                     location=[srow['latitude'], srow['longitude']],
                     radius=5,
@@ -344,9 +347,11 @@ def add_routes_to_map(m, directions, stations_df, selected_route=None, station_t
                     fill_opacity=0.9,
                     opacity=0.9,
                     weight=1,
-                    popup=f"Station: {srow.get('station_id', '')}"
+                    popup=f"Station: {station_id}"
                 ).add_to(m)
 
+    # Return count of unique stations (avoids double-counting)
+    total_stations = len(unique_stations)
     return total_stations, route_stats
 
 def write_route_stations_to_redis(route_stats, selected_route=None):
@@ -705,19 +710,6 @@ def main():
                             st.write(f"🚲 Stations on route: **{stat['station_count']}**")
 
                             st.divider()
-
-                            # Show list of station IDs (first 10) and a zoom button
-                            if stat['station_count'] > 0:
-                                list_preview = stat['route_stations']['station_id'].astype(str).tolist()[:10]
-                                st.write("Stations (first 10):", ", ".join(list_preview))
-                                if st.button("🔎 Zoom to first station", key=f"zoom_station_{idx}"):
-                                    first_station = stat['route_stations'].iloc[0]
-                                    st.session_state['zoom_to_station'] = {
-                                        'lat': first_station['latitude'],
-                                        'lon': first_station['longitude'],
-                                        'station_id': first_station['station_id']
-                                    }
-                                    st.rerun()
 
         return_vals = ["last_clicked"] if touch else []
         map_data = st_folium(map_obj, returned_objects= return_vals, use_container_width=True)

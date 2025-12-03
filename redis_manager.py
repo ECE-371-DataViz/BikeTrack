@@ -21,7 +21,7 @@ REDIS_DB = 0
 STATION_STATUS_URL = "https://gbfs.citibikenyc.com/gbfs/en/station_status.json"
 
 # Update interval in seconds
-UPDATE_INTERVAL = 0.1
+UPDATE_INTERVAL = 5
 
 class RedisStationManager:
     def __init__(self, host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB):
@@ -69,10 +69,14 @@ class RedisStationManager:
     
     def update_station_status(self):
         """Fetch GBFS data and update station statuses in Redis"""
-        response = requests.get(STATION_STATUS_URL)
-        response.raise_for_status()
-        data = response.json()
-        
+        try:
+            response = requests.get(STATION_STATUS_URL, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+        except Exception as e:
+            print(f"Error fetching station status: {e}")
+            return 
+             
         updated = 0
         for station in data["data"]["stations"]:
             station_id = station["station_id"]
@@ -111,6 +115,7 @@ class RedisStationManager:
                     station_data['prev_ebikes_available'] = old_ebikes
                     # Store update timestamp as Unix timestamp (float)
                     station_data['update_timestamp'] = time.time()
+                    updated += 1
                 
                 # Update status fields
                 station_data['bikes_available'] = new_bikes
@@ -122,10 +127,10 @@ class RedisStationManager:
                 
                 # Save back to Redis
                 self.redis_client.set(station_key, json.dumps(station_data))
-                updated += 1
         
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        print(f"[{timestamp}] Updated {updated} stations")
+        if updated > 0:
+            print(f"[{timestamp}] Updated {updated} stations")
         return updated
     
     def get_station(self, station_id):

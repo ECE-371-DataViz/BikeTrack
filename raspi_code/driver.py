@@ -12,9 +12,10 @@ COLOR_MAP = {
     "white": (255, 255, 255)
 }
 UPDATE_LIST = []
+IN_ROUTE_MODE = False  # Track if we're currently displaying a route
 
 ##The LED behavior depends on the driver itself...
-LEDS = []
+LEDS = [0] * 1000
 NUM_BLINKS = 3
 BLINK_DURATION = 0.5
 UPDATE_RATE = 1  # Seconds between update
@@ -22,9 +23,6 @@ UPDATE_RATE = 1  # Seconds between update
 # Redis manager instance
 redis_manager = RedisStationManager()
 
-# Timestamp tracking
-last_checked_timestamp = 0.0
-last_route_timestamp = 0.0
 
 def load_stations_from_redis():
     """Verify Redis connection and station data"""
@@ -37,51 +35,85 @@ def get_route_stations():
     """Get route stations and their colors from Redis"""
     return redis_manager.get_route_stations()
 
-def get_data():
+def get_data(last_update_ts, last_route_ts):
     """Get updated station data from Redis using timestamp-based tracking
     
+    Args:
+        last_update_ts: Last timestamp we checked for station updates
+        last_route_ts: Last timestamp we checked for route updates
+    
     Returns:
-        tuple: (success: bool, clear_all: bool)
+        tuple: (success: bool, is_route_update: bool, new_update_ts: float, new_route_ts: float)
     """
-
+    global IN_ROUTE_MODE
     # Check if all LEDs should be cleared
     if redis_manager.check_clear_all_flag():
-        print("Clearing all LEDs")
+        print("Clearing all LEDs - returning to blinking mode")
         redis_manager.clear_clear_all_flag()
-        last_route_timestamp = 0.0  # Reset route tracking
-        return (True, True)  # Success, and clear all LEDs
+        IN_ROUTE_MODE = False  # Exit route mode
+        # Don't add anything to UPDATE_LIST - just clear
+        # Return True for route_update to trigger clear behavior
+        return (True, True, time.time(), 0.0)  # Reset route tracking
     
-    # Get current route update timestamp
-    route_timestamp = redis_manager.get_route_update_timestamp()
+    # Get current route update timestamp from Redis
+    current_route_ts = redis_manager.get_route_update_timestamp()
     
     # Check if route has been updated since we last checked
-    if route_timestamp > last_route_timestamp:
-        print(f"New route detected (timestamp: {route_timestamp})")
-        last_route_timestamp = route_timestamp
+    if current_route_ts > last_route_ts:
+        print(f"New route detected (timestamp: {current_route_ts})")
         
         # Get route stations
         route_stations = get_route_stations()
         
+        if len(route_stations) == 0:
+            # Empty route means we're clearing - return to blinking mode
+            print("Empty route - returning to blinking mode")
+            IN_ROUTE_MODE = False
+            return (True, True, time.time(), current_route_ts)
+        
+        # We have a route - enter route mode
+        IN_ROUTE_MODE = True
+        
         # Add route stations to update list
+        print(f"Processing {len(route_stations)} route stations from Redis")
+        stations_found = 0
+        stations_missing = 0
+        
         for station_id, color in route_stations.items():
             station_data = redis_manager.get_station(station_id)
             if station_data:
                 position = station_data['index']
-                color_rgb = COLOR_MAP.get(color, COLOR_MAP["white"])
+                # Convert hex color to RGB (colors from app.py are hex codes like #0077be)
+                # Default to white if conversion fails
+                if color.startswith('#'):
+                    try:
+                        hex_color = color.lstrip('#')
+                        r = int(hex_color[0:2], 16)
+                        g = int(hex_color[2:4], 16)
+                        b = int(hex_color[4:6], 16)
+                        color_rgb = (r, g, b)
+                    except:
+                        color_rgb = COLOR_MAP["white"]
+                else:
+                    color_rgb = COLOR_MAP.get(color, COLOR_MAP["white"])
+                
                 UPDATE_LIST.append((position, color_rgb))
+                stations_found += 1
+            else:
+                stations_missing += 1
         
-        return (True, True)  # Success, and clear all LEDs first
+        print(f"Route stations - Found: {stations_found}, Missing: {stations_missing}")
+        
+        # Return with updated route timestamp and route_update=True
+        return (True, True, time.time(), current_route_ts)
     
-    # Normal operation - check for station updates using timestamps
-    route_stations = get_route_stations()
+    # If we're in route mode, don't process blinking updates for station changes
+    if IN_ROUTE_MODE:
+        # Just maintain the current route display, no blinking updates
+        return (True, False, last_update_ts, last_route_ts)
+    
+    # Normal blinking mode - check for station updates using timestamps
     current_time = time.time()
-    
-    # Update route stations with white color (always show these)
-    for station_id in route_stations.keys():
-        station_data = redis_manager.get_station(station_id)
-        if station_data:
-            position = station_data['index']
-            UPDATE_LIST.append((position, COLOR_MAP["white"]))
     
     # Get all stations and check for updates since last check
     all_stations = redis_manager.get_all_stations()
@@ -89,13 +121,9 @@ def get_data():
     for station_data in all_stations:
         station_id = station_data['station_id']
         
-        # Skip route stations - already handled
-        if station_id in route_stations:
-            continue
-        
         # Check if station was updated after our last check
         update_ts = station_data.get('update_timestamp', 0.0)
-        if update_ts > last_checked_timestamp:
+        if update_ts > last_update_ts:
             position = station_data['index']
             bikes_available = station_data.get('bikes_available', 0)
             ebikes_available = station_data.get('ebikes_available', 0)
@@ -117,10 +145,8 @@ def get_data():
                     # Regular bike returned (blue)
                     UPDATE_LIST.append((position, COLOR_MAP["blue"]))
     
-    # Update our last checked timestamp to current time
-    last_checked_timestamp = current_time
-    
-    return (True, False)  # Success, normal operation
+    # Return normal operation - route_update=False
+    return (True, False, current_time, last_route_ts)
 
 def clear_all_leds():
     """Clear all LEDs to black"""
@@ -134,11 +160,11 @@ def update_leds(route_render=False):
     Args:
         route_render: If True, this is a route render - show progressive build from south to north
     """
-    if route_render:
+    if route_render:        
         # Route rendering mode: clear all LEDs first
         clear_all_leds()
         time.sleep(0.1)
-        
+        print(f"Rendering route with {len(UPDATE_LIST)} stations")
         # Sort UPDATE_LIST by latitude (south to north) for progressive rendering
         # Get station data for each LED to sort by latitude
         stations_with_positions = []
@@ -162,7 +188,8 @@ def update_leds(route_render=False):
             LEDS[station_info['led_idx']] = station_info['color']
             time.sleep(0.5)  # 500ms delay between each LED Update        
         UPDATE_LIST.clear()
-    else:
+    elif len(UPDATE_LIST) > 0:
+        print(f"Blinking mode: Updating {len(UPDATE_LIST)} stations")
         # Normal blinking mode for station updates
         for _ in range(NUM_BLINKS):
             for (led_idx, j) in UPDATE_LIST:
@@ -173,7 +200,7 @@ def update_leds(route_render=False):
             time.sleep(BLINK_DURATION / 2)
             #Leave them on the last color, though this behavior could be customized
 
-    UPDATE_LIST.clear()
+        UPDATE_LIST.clear()
 
 if __name__ == '__main__':
     print("Loading stations from Redis...")
@@ -182,11 +209,15 @@ if __name__ == '__main__':
     print(f"Starting LED update loop (every {UPDATE_RATE} seconds)...")
     print("Press Ctrl+C to stop\n")
     
+    # Initialize timestamps
+    last_update_timestamp = 0.0
+    last_route_timestamp = 0.0
+    
     while True:
         s_time = time.time()
-        success, is_new_route = get_data()
+        success, is_route_update, last_update_timestamp, last_route_timestamp = get_data(last_update_timestamp, last_route_timestamp)
         if success:
-            update_leds(clear_first=is_new_route)
+            update_leds(route_render=is_route_update)
         time_dormant = max(0, UPDATE_RATE - (time.time() - s_time))
         time.sleep(time_dormant)
 
