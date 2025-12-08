@@ -47,17 +47,21 @@ class Station(Base):
 
     def to_dict(self):
         """Convert to dictionary"""
-        return {
+        result = {
             'index': self.index,
             'station_id': self.station_id,
             'name': self.name,
             'latitude': self.latitude,
             'longitude': self.longitude,
-            'bikes_available': self.current_data.bikes_available,
-            'docks_available': self.current_data.docks_available,
-            'ebikes_available': self.current_data.ebikes_available,
-            'last_updated': self.current_data.last_updated,
         }
+        if self.current_data:
+            result.update({
+                'bikes_available': self.current_data.bikes_available,
+                'docks_available': self.current_data.docks_available,
+                'ebikes_available': self.current_data.ebikes_available,
+                'last_updated': self.current_data.last_updated,
+            })
+        return result
 
 
 class CurrentData(Base):
@@ -286,6 +290,96 @@ class DBManager:
 
                 result = [x.to_dict() for x in snapshots]
                 return result
+
+    def get_timestamp_range(self):
+        """Get the min and max timestamps from historic_data"""
+        with self.Session_eng() as session:
+            result = session.query(
+                func.min(HistoricData.timestamp),
+                func.max(HistoricData.timestamp)
+            ).first()
+            if result and result[0] and result[1]:
+                return {'min': result[0], 'max': result[1]}
+            return None
+
+    def get_all_stations_basic(self):
+        """Get all stations with basic location info (no current data)"""
+        with self.Session_eng() as session:
+            stations = session.query(Station).all()
+            return [{
+                'station_id': s.station_id,
+                'name': s.name,
+                'latitude': s.latitude,
+                'longitude': s.longitude,
+                'index': s.index
+            } for s in stations]
+
+    def get_all_station_status(self):
+        """Get status dict for all stations (for app.py compatibility)"""
+        with self.Session_eng() as session:
+            stations = session.query(Station).options(joinedload(Station.current_data)).all()
+            status_dict = {}
+            for station in stations:
+                if station.current_data:
+                    status_dict[station.station_id] = {
+                        'bikes_available': station.current_data.bikes_available,
+                        'docks_available': station.current_data.docks_available,
+                        'ebikes_available': station.current_data.ebikes_available,
+                        'is_renting': True,  # Assume always renting for now
+                        'is_returning': True,  # Assume always returning for now
+                    }
+            return status_dict
+
+    def write_route_stations(self, route_stats, selected_route=None):
+        """Write route stations and their colors to PostgreSQL
+        
+        Args:
+            route_stats: List of route statistics with station data
+            selected_route: Index of selected route (None for all routes)
+        """
+        with self.Session_eng() as session:
+            # Clear existing route data
+            session.query(Route).delete()
+            
+            # Collect all stations to write
+            stations_to_write = []
+            
+            for idx, stat in enumerate(route_stats):
+                # Only include stations from selected route, or all routes if none selected
+                should_include = (selected_route is None) or (selected_route == idx)
+                
+                if should_include and 'route_stations' in stat and not stat['route_stations'].empty:
+                    color = stat['color']
+                    
+                    for _, srow in stat['route_stations'].iterrows():
+                        stations_to_write.append({
+                            'station_id': str(srow['station_id']),
+                            'color': color
+                        })
+            
+            # Write to database
+            if stations_to_write:
+                for station_data in stations_to_write:
+                    route = Route(
+                        station_id=station_data['station_id'],
+                        color=station_data['color']
+                    )
+                    session.add(route)
+                
+                self.update_metadata(session, type=ROUTE)
+                session.commit()
+                print(f"✓ Wrote {len(stations_to_write)} route stations to PostgreSQL")
+                return len(stations_to_write)
+            return 0
+
+    def ping(self):
+        """Check if PostgreSQL connection is alive"""
+        try:
+            with self.Session_eng() as session:
+                session.execute(select(1))
+            return True
+        except Exception:
+            return False
 
 def main():
     """Main function to run the PostgreSQL manager"""
