@@ -8,11 +8,10 @@ import googlemaps
 import polyline
 from datetime import datetime
 
-
 import sys
 import os
 from postgres_manager import DBManager
-from API_Config import GOOGLE_MAPS
+from globals import *
 
 def haversine_distance(lat1, lon1, lat2, lon2):
     R = 6371000
@@ -49,15 +48,11 @@ def get_db_manager():
 
 @st.cache_data(ttl=30, show_spinner='Loading CitiBike Stations from PostgreSQL...')
 def load_citibike_stations():
-    """Load CitiBike stations from PostgreSQL
-    Returns a DataFrame with columns ['station_id', 'latitude', 'longitude', 'name', 'index']
-    """
     db_manager = get_db_manager()
     if not db_manager:
         return pd.DataFrame(columns=['station_id', 'latitude', 'longitude'])
     
-    stations = db_manager.get_all_stations()
-    
+    stations = db_manager.get_all_stations()    
     df = pd.DataFrame([
         {
             'station_id': s['station_id'],
@@ -83,198 +78,50 @@ def fetch_gbfs_station_status():
     
     return db_manager.get_all_station_status()
 
-def find_closest_station_with_bikes(origin_coords, stations_df, gbfs_status, min_bikes=1, search_radius_meters=500, bike_type='all'):
-    """Find the closest station to origin that has bikes available
+def find_closest_station(coords, type='bikes'):
+    db_manager = get_db_manager()
+    lat, lon = coords
     
-    Args:
-        origin_coords: tuple (lat, lon) of the starting point
-        stations_df: DataFrame with station locations
-        gbfs_status: dict with live station status
-        min_bikes: minimum number of bikes required
-        search_radius_meters: maximum search radius
-        bike_type: 'ebike', 'regular', or 'all'
-    
-    Returns:
-        dict with station info or None if not found
-    """
-    if stations_df.empty or not gbfs_status:
+    # Get closest station with specified filter
+    stations = db_manager.get_stations_by_distance(lat, lon, filter_type=type)
+    if not stations:
         return None
-    
-    origin_lat, origin_lon = origin_coords
-    
-    # Filter stations with bikes available and are renting
-    available_stations = []
-    for _, station in stations_df.iterrows():
-        station_id = str(station['station_id'])
-        if station_id in gbfs_status:
-            status = gbfs_status[station_id]
-            
-            # Check bike availability based on type
-            has_required_bikes = False
-            if bike_type == 'ebike':
-                has_required_bikes = status['ebikes_available'] >= min_bikes
-            elif bike_type == 'regular':
-                regular_bikes = status['bikes_available'] - status['ebikes_available']
-                has_required_bikes = regular_bikes >= min_bikes
-            else:  # 'all'
-                has_required_bikes = status['bikes_available'] >= min_bikes
-            
-            if has_required_bikes and status['is_renting']:
-                distance = haversine_distance(origin_lat, origin_lon, 
-                                            station['latitude'], station['longitude'])
-                if distance <= search_radius_meters:
-                    available_stations.append({
-                        'station_id': station_id,
-                        'name': station.get('name', ''),
-                        'latitude': station['latitude'],
-                        'longitude': station['longitude'],
-                        'distance': distance,
-                        'bikes_available': status['bikes_available'],
-                        'ebikes_available': status['ebikes_available'],
-                        'regular_bikes': status['bikes_available'] - status['ebikes_available']
-                    })
-    
-    if not available_stations:
-        return None
-    
-    # Return the closest station
-    return min(available_stations, key=lambda x: x['distance'])
-
-def find_closest_station_with_docks(destination_coords, stations_df, gbfs_status, min_docks=1, search_radius_meters=500):
-    """Find the closest station to destination that has docks available
-    
-    Args:
-        destination_coords: tuple (lat, lon) of the ending point
-        stations_df: DataFrame with station locations
-        gbfs_status: dict with live station status
-        min_docks: minimum number of docks required
-        search_radius_meters: maximum search radius
-    
-    Returns:
-        dict with station info or None if not found
-    """
-    if stations_df.empty or not gbfs_status:
-        return None
-    
-    dest_lat, dest_lon = destination_coords
-    
-    # Filter stations with docks available and are accepting returns
-    available_stations = []
-    for _, station in stations_df.iterrows():
-        station_id = str(station['station_id'])
-        if station_id in gbfs_status:
-            status = gbfs_status[station_id]
-            if (status['docks_available'] >= min_docks and 
-                status['is_returning']):
-                distance = haversine_distance(dest_lat, dest_lon, 
-                                            station['latitude'], station['longitude'])
-                if distance <= search_radius_meters:
-                    available_stations.append({
-                        'station_id': station_id,
-                        'name': station.get('name', ''),
-                        'latitude': station['latitude'],
-                        'longitude': station['longitude'],
-                        'distance': distance,
-                        'docks_available': status['docks_available']
-                    })
-    
-    if not available_stations:
-        return None
-    
-    # Return the closest station
-    return min(available_stations, key=lambda x: x['distance'])
-
-
-def point_to_segment_distance(point_lat, point_lon, seg_lat1, seg_lon1, seg_lat2, seg_lon2):
-    dx = seg_lon2 - seg_lon1
-    dy = seg_lat2 - seg_lat1
-
-    length_sq = dx * dx + dy * dy
-
-    if np.isscalar(length_sq):
-        if length_sq == 0:
-            return haversine_distance(point_lat, point_lon, seg_lat1, seg_lon1)
-        t = np.clip(((point_lon - seg_lon1) * dx + (point_lat - seg_lat1) * dy) / length_sq, 0, 1)
-    else:
-        t = np.where(length_sq == 0, 0,
-                     np.clip(((point_lon - seg_lon1) * dx + (point_lat - seg_lat1) * dy) / length_sq, 0, 1))
-
-    closest_lat = seg_lat1 + t * dy
-    closest_lon = seg_lon1 + t * dx
-
-    return haversine_distance(point_lat, point_lon, closest_lat, closest_lon)
+    station = stations[0]
+    distance_meters = haversine_distance(lat, lon, station['latitude'], station['longitude'])
+    station['distance'] = distance_meters
+    return station
 
 @st.cache_data(show_spinner='Filtering Docks Along Path...')
-def filter_points_along_path(all_points_df, path, threshold=10, start_end_padding=200):
-    """Filter points along a path with extra padding around start and end points
+def filter_points_along_path(path, threshold=10):
+    db_manager = get_db_manager()
     
-    Args:
-        all_points_df: DataFrame with station locations
-        path: List of (lat, lon) coordinates defining the route
-        threshold: Distance threshold in meters for regular path segments
-        start_end_padding: Extra padding in meters around start and end points
-    """
     path_array = np.array(path)
-
-    # Add significant padding for start and end points
-    start_point = path_array[0]
-    end_point = path_array[-1]
     
     # Calculate average latitude for degree conversion
     avg_lat = path_array[:, 0].mean()
     
-    # Convert padding to degrees
-    padding_lat_deg = start_end_padding / 111000
-    padding_lon_deg = start_end_padding / (111000 * np.cos(np.radians(avg_lat)))
+    # Convert threshold from meters to degrees (approximate)
+    threshold_degrees = threshold / (111000 * np.cos(np.radians(avg_lat)))
+
+    stations_dict = {}
     
-    # Expand bounding box to include padded start and end areas
-    min_lat = min(path_array[:, 0].min(), start_point[0] - padding_lat_deg, end_point[0] - padding_lat_deg)
-    max_lat = max(path_array[:, 0].max(), start_point[0] + padding_lat_deg, end_point[0] + padding_lat_deg)
-    min_lon = min(path_array[:, 1].min(), start_point[1] - padding_lon_deg, end_point[1] - padding_lon_deg)
-    max_lon = max(path_array[:, 1].max(), start_point[1] + padding_lon_deg, end_point[1] + padding_lon_deg)
-
-    margin_lat_deg = threshold / 111000
-    margin_lon_deg = threshold / (111000 * np.cos(np.radians(avg_lat)))
-
-    bbox_mask = (
-        (all_points_df['latitude'] >= min_lat - margin_lat_deg) &
-        (all_points_df['latitude'] <= max_lat + margin_lat_deg) &
-        (all_points_df['longitude'] >= min_lon - margin_lon_deg) &
-        (all_points_df['longitude'] <= max_lon + margin_lon_deg)
-    )
-    filtered_df = all_points_df[bbox_mask]
-    if len(filtered_df) == 0:
-        return pd.DataFrame(columns=all_points_df.columns)
-
-    points_lat = filtered_df['latitude'].values
-    points_lon = filtered_df['longitude'].values
-
-    min_distances = np.full(len(filtered_df), np.inf)
     for i in range(len(path_array) - 1):
-        seg_lat1, seg_lon1 = path_array[i]
-        seg_lat2, seg_lon2 = path_array[i + 1]
-
-        seg_min_lat = min(seg_lat1, seg_lat2) - margin_lat_deg
-        seg_max_lat = max(seg_lat1, seg_lat2) + margin_lat_deg
-        seg_min_lon = min(seg_lon1, seg_lon2) - margin_lon_deg
-        seg_max_lon = max(seg_lon1, seg_lon2) + margin_lon_deg
-
-        seg_bbox_mask = (
-            (points_lat >= seg_min_lat) & (points_lat <= seg_max_lat) &
-            (points_lon >= seg_min_lon) & (points_lon <= seg_max_lon)
+        lat1, lon1 = path_array[i]
+        lat2, lon2 = path_array[i + 1]
+        
+        # Get stations near this segment from DB
+        segment_stations = db_manager.get_stations_near_segment(
+            lat1, lon1, lat2, lon2, threshold_degrees
         )
-
-        if not seg_bbox_mask.any():
-            continue
-
-        seg_points_lat = points_lat[seg_bbox_mask]
-        seg_points_lon = points_lon[seg_bbox_mask]
-
-        distances = point_to_segment_distance(seg_points_lat, seg_points_lon, seg_lat1, seg_lon1, seg_lat2, seg_lon2)
-        min_distances[seg_bbox_mask] = np.minimum(min_distances[seg_bbox_mask], distances)
-
-    mask = min_distances <= threshold
-    return filtered_df[mask]
+        
+        # Add to our collection (deduplicating by station_id)
+        for station in segment_stations:
+            station_id = station['station_id']
+            if station_id not in stations_dict:
+                stations_dict[station_id] = station
+        
+    # Convert to DataFrame for compatibility with downstream code
+    return pd.DataFrame(list(stations_dict.values()))
 
 @st.cache_data(show_spinner='Getting Coordinates...')
 def geocode(address: str):
@@ -288,119 +135,100 @@ def geocode(address: str):
 def get_gmaps_client():
     return googlemaps.Client(key=GOOGLE_MAPS)
 
-def add_routes_to_map(m, directions, stations_df, selected_route=None, station_threshold=50):
-    """Add routes and CitiBike stations along routes to map with per-route statistics and highlighting"""
-
+def add_routes_to_map(m, directions, selected_route=None, station_threshold=50, route_type='bikes'):
+    db_manager = get_db_manager()
     features = directions["features"]
-    route_colors = ["#0077be", "#e74c3c", "#2ecc71"]
     route_names = ["Route 1", "Route 2", "Route 3"]
-
     all_paths = []
     for feature in features:
         geom = feature.get("geometry", {})
         coords_list = geom.get("coordinates", [])
         path = [(lat, lon) for lon, lat in coords_list]
         all_paths.append(path)
-
-    # Track unique stations to avoid double-counting across routes
-    unique_stations = set()
-
-    # Per-route statistics
     route_stats = []
-
-    # Draw routes with opacity based on selection
     for idx, path in enumerate(all_paths):
-        if selected_route is None:
-            # Show all routes normally
-            opacity = 0.9
-            weight = 4
-        elif selected_route == idx:
-            # Highlight selected route
-            opacity = 1.0
-            weight = 6
-        else:
-            # Dim unselected routes
-            opacity = 0.15
-            weight = 2
-
         folium.PolyLine(
             path,
-            color=route_colors[idx],
-            weight=weight,
-            opacity=opacity
+            color="#ffffff",  # Route lines always white
+            weight=4,
+            opacity=0.9
         ).add_to(m)
-
-    for idx, path in enumerate(all_paths):
-        # Find stations along the route
-        route_stations = pd.DataFrame(columns=['station_id', 'latitude', 'longitude'])
-        if stations_df is not None and not stations_df.empty:
-            route_stations = filter_points_along_path(stations_df, path, threshold=station_threshold)
-
-        route_station_count = len(route_stations)
-
-        # Store route stats
+        # Get start and end stations using DB-side filtering
+        start_coords = path[0]
+        end_coords = path[-1]
+        if route_type == 'ebikes':
+            start_candidates = db_manager.get_stations_by_distance(start_coords[0], start_coords[1], limit=1, filter_type='ebikes')
+        else:
+            start_candidates = db_manager.get_stations_by_distance(start_coords[0], start_coords[1], limit=1, filter_type='bikes')
+        end_candidates = db_manager.get_stations_by_distance(end_coords[0], end_coords[1], limit=1, filter_type='docks')
+        route_stations = []
+        if start_candidates:
+            start_station = start_candidates[0]
+            start_station['color'] = '#2ecc71' if route_type == 'ebikes' else '#0077be'
+            route_stations.append(start_station)
+        # Add intermediate stations (white)
+        mid_stations = filter_points_along_path(path, threshold=station_threshold)
+        for station in mid_stations:
+            # Avoid duplicating start/end
+            if (not start_candidates or station['station_id'] != start_candidates[0]['station_id']) and \
+               (not end_candidates or station['station_id'] != end_candidates[0]['station_id']):
+                station['color'] = '#ffffff'
+                route_stations.append(station)
+        if end_candidates:
+            end_station = end_candidates[0]
+            end_station['color'] = '#e74c3c'
+            route_stations.append(end_station)
         route_stats.append({
             'route_name': route_names[idx],
-            'color': route_colors[idx],
-            'station_count': route_station_count,
+            'color': '#ffffff',
+            'station_count': len(route_stations),
             'route_stations': route_stations,
         })
-
-
-        # Show stations for selected route, or all routes if none selected
         show_route = (selected_route is None) or (selected_route == idx)
-        if show_route and not route_stations.empty:
-            # Track unique stations across all shown routes
-            for _, srow in route_stations.iterrows():
-                station_id = str(srow.get('station_id', ''))
-                unique_stations.add(station_id)
-                
-                # Draw stations in white
+        if show_route and len(route_stations) > 0:
+            for station in route_stations:
                 folium.CircleMarker(
-                    location=[srow['latitude'], srow['longitude']],
+                    location=[station['latitude'], station['longitude']],
                     radius=5,
-                    color='#ffffff',
+                    color=station['color'],
                     fill=True,
-                    fill_color='#ffffff',
+                    fill_color=station['color'],
                     fill_opacity=0.9,
                     opacity=0.9,
                     weight=1,
-                    popup=f"Station: {station_id}"
+                    popup=f"Station: {station.get('station_name', station.get('name', station.get('station_id', '')))}"
                 ).add_to(m)
-
-    # Return count of unique stations (avoids double-counting)
-    total_stations = len(unique_stations)
-    return total_stations, route_stats
+    return route_stats
 
 def write_route_stations_to_db(route_stats, selected_route=None):
-    """Write route stations and their colors to PostgreSQL"""
     db_manager = get_db_manager()
-    if not db_manager:
-        return
-    
-    db_manager.write_route_stations(route_stats, selected_route)
+    # Flatten all route_stations for DB writing
+    all_stations = []
+    for route in route_stats:
+        for station in route['route_stations']:
+            all_stations.append({
+                'station_id': station['station_id'],
+                'color': station['color']
+            })
+    db_manager.save_route(all_stations, selected_route)
 
-def add_all_stations_to_map(m, stations_df, max_stations=10000):
+def add_all_stations_to_map(m, station_list):
     """Add all stations to map with optional limiting for performance"""
-    if stations_df is None or stations_df.empty:
-        return 0, pd.DataFrame(columns=['station_id', 'latitude', 'longitude'])
-
-    display_stations = stations_df.copy()
-    if len(display_stations) > max_stations:
-        display_stations = display_stations.sample(n=max_stations, random_state=42)
-
-    for _, row in display_stations.iterrows():
+    if not station_list:
+        return 0, []
+    display_stations = station_list
+    for row in display_stations:
         folium.CircleMarker(
             location=[row['latitude'], row['longitude']],
             radius=4,
-            color="#ffffff",
+            color='#3388ff',
             fill=True,
-            fill_color="#ffffff",
-            fill_opacity=0.8,
+            fill_color='#3388ff',
+            fill_opacity=0.7,
+            opacity=0.9,
             weight=1,
-            popup=f"Station: {row.get('station_id', '')}"
+            popup=f"Station: {row['station_name']}"
         ).add_to(m)
-
     return len(display_stations), display_stations
 
 def set_run_true():
@@ -414,9 +242,8 @@ def clear_route():
     
     # Clear route data from PostgreSQL
     db_manager = get_db_manager()
-    if db_manager:
-        db_manager.clear_route()
-        st.success("✓ Route cleared - LEDs will return to normal status mode")
+    db_manager.clear_route()
+    st.success("✓ Route cleared - LEDs will return to normal status mode")
 
 def reset_run():
     st.session_state['click_origin'] = None
@@ -503,7 +330,7 @@ def get_regular_bikes_count(bikes_available, ebikes_available):
     """Calculate number of regular (non-electric) bikes"""
     return bikes_available - ebikes_available
 
-def get_color_for_availability(bikes_available, ebikes_available, docks_available):
+def get_color_for_availability(bikes_available, ebikes_available):
     """Get color based on availability (matching driver.py logic)"""
     # Green for ebikes available
     if ebikes_available > 0:
@@ -511,18 +338,19 @@ def get_color_for_availability(bikes_available, ebikes_available, docks_availabl
         return '#00FF00'  # Green
     # Blue for regular bikes available
     elif bikes_available > 0:
+        brightness = max(bikes_available, 25.5) * 10
         return '#0000FF'  # Blue
     # Red for no bikes
     else:
         return '#FF0000'  # Red
 
-def add_general_view_stations(m, stations_df, gbfs_status):
+def add_general_view_stations(m, station_list, gbfs_status):
     """Add all stations to map with color coding based on availability"""
-    if stations_df is None or stations_df.empty or not gbfs_status:
+    if not station_list or not gbfs_status:
         return 0
     
     stations_added = 0
-    for _, station in stations_df.iterrows():
+    for station in station_list:
         station_id = str(station['station_id'])
         if station_id in gbfs_status:
             status = gbfs_status[station_id]
@@ -537,7 +365,7 @@ def add_general_view_stations(m, stations_df, gbfs_status):
             # Create popup with station info
             popup_html = f"""
             <div style="font-family: Arial, sans-serif; min-width: 150px;">
-                <b>{station.get('name', 'Station ' + station_id)}</b><br>
+                <b>{station.get('name', ' ')}</b><br>
                 <hr style="margin: 5px 0;">
                 🚲 Regular Bikes: {regular_bikes}<br>
                 ⚡ E-Bikes: {ebikes}<br>
@@ -560,16 +388,16 @@ def add_general_view_stations(m, stations_df, gbfs_status):
     
     return stations_added
 
-def add_historic_view_stations(m, stations_df, historic_data):
+def add_historic_view_stations(m, station_list, historic_data):
     """Add stations to map with historic data"""
-    if stations_df is None or stations_df.empty or not historic_data:
+    if not station_list or not historic_data:
         return 0
     
     # Create a lookup dict for historic data by station_id
     historic_dict = {item['station_id']: item for item in historic_data}
     
     stations_added = 0
-    for _, station in stations_df.iterrows():
+    for station in station_list:
         station_id = str(station['station_id'])
         if station_id in historic_dict:
             historic = historic_dict[station_id]
@@ -688,7 +516,8 @@ def main():
     elif app_mode == 'General View':
         st.sidebar.subheader("Live Station View")
         st.sidebar.info("Viewing all stations with current availability. Stations are color-coded:\n\n🟢 Green = E-bikes available\n\n🔵 Blue = Regular bikes available\n\n🔴 Red = No bikes available")
-        
+        db_manager = get_db_manager()
+        db_manager.update_metadata(type=LIVE)
         # Add refresh button
         if st.sidebar.button("🔄 Refresh Data", use_container_width=True, type="primary"):
             st.cache_data.clear()
@@ -696,23 +525,17 @@ def main():
     
     elif app_mode == 'Historic View':
         st.sidebar.subheader("Historic Station View")
-        
-        # Get timestamp range from database
         db_manager = get_db_manager()
         if db_manager:
             timestamp_range = db_manager.get_timestamp_range()
             if timestamp_range:
                 min_time = timestamp_range['min']
                 max_time = timestamp_range['max']
-                
                 st.sidebar.write(f"📅 Data Range:")
                 st.sidebar.write(f"From: {min_time.strftime('%Y-%m-%d %H:%M')}")
                 st.sidebar.write(f"To: {max_time.strftime('%Y-%m-%d %H:%M')}")
-                
-                # Time slider
                 if 'historic_timestamp' not in st.session_state:
                     st.session_state['historic_timestamp'] = min_time
-                
                 selected_datetime = st.sidebar.slider(
                     "Select Time:",
                     min_value=min_time,
@@ -721,11 +544,11 @@ def main():
                     format="MM/DD/YY HH:mm",
                     key='historic_time_slider'
                 )
+                speed = st.sidebar.slider("Playback Speed (Seconds/Step)", 1, 60, 10, key='historic_speed_slider')
                 st.session_state['historic_timestamp'] = selected_datetime
-                
                 st.sidebar.info("Stations are color-coded:\n\n🟢 Green = E-bikes available\n\n🔵 Blue = Regular bikes available\n\n🔴 Red = No bikes available")
-            else:
-                st.sidebar.warning("No historic data available")
+                # Update metadata table for historic view
+                db_manager.update_metadata(type=HISTORIC, viewing_timestamp=selected_datetime, speed=speed)
         else:
             st.sidebar.error("Could not connect to database")
 
@@ -769,12 +592,11 @@ def main():
                 o = tuple(o_c)
                 d = tuple(d_c)
                 
-                # Fetch live GBFS data first
-                gbfs_status = fetch_gbfs_station_status()
-                
                 # Find recommended stations with bikes/docks BEFORE generating routes
-                start_station = find_closest_station_with_bikes(o, stations_df, gbfs_status, min_bikes=1, search_radius_meters=500, bike_type=bike_type_value)
-                end_station = find_closest_station_with_docks(d, stations_df, gbfs_status, min_docks=1, search_radius_meters=500)
+                # Use the bike_type_value to determine filter type
+                filter_type = 'ebikes' if bike_type_value == 'ebike' else 'bikes'
+                start_station = find_closest_station(o, type=filter_type)
+                end_station = find_closest_station(d, type='docks')
                 
                 # Use station locations for routing if found, otherwise use original points
                 route_origin = (start_station['latitude'], start_station['longitude']) if start_station else o

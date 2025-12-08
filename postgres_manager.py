@@ -15,11 +15,7 @@ from sqlalchemy.orm import sessionmaker, relationship, DeclarativeBase, Mapped, 
 from typing import List, Optional
 from sqlalchemy import URL
 from sqlalchemy.orm import sessionmaker, relationship, DeclarativeBase
-
-# Metadata types
-LIVE=0
-ROUTE=1
-HISTORIC=2
+from globals import *
 
 # SQLAlchemy ORM Base
 class Base(DeclarativeBase):
@@ -124,9 +120,8 @@ class AppMetadata(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, default=1)
     last_updated: Mapped[datetime] = mapped_column()
-
-    ##Used to figure out how quickly the main app should update its display
-    speed: Mapped[int]
+    viewing_timestamp: Mapped[Optional[datetime]] = mapped_column(nullable=True)
+    speed: Mapped[int] = mapped_column(default=1)
     mode: Mapped[int] = mapped_column(default=0)
 
 class DBManager:
@@ -144,17 +139,39 @@ class DBManager:
         self.Session_eng = sessionmaker(bind=self.engine)
         print(f"Connected to PostgreSQL at {host}:{port}/{dbname}")
     
-    def update_metadata(self, session=None, type=None):
+    def get_metadata(self, session=None):
+        """Retrieve application metadata"""
+        with self.Session_eng() as session:
+            meta = session.get(AppMetadata, 1)
+            return meta
+
+    def update_metadata(self, session=None, type=None, viewing_timestamp=None, speed=None):
+        """
+        Update the metadata table with mode, last_updated, viewing_timestamp, and speed.
+        Args:
+            session: SQLAlchemy session (optional)
+            type: Mode label (optional)
+            viewing_timestamp: Timestamp being viewed (optional)
+            speed: Speed value (optional)
+        """
         if session is None:
             with self.Session_eng() as session:
                 meta = session.get(AppMetadata, 1)
                 meta.last_updated = datetime.now()
-                meta.mode = type if type is not None else meta.mode
+                meta.mode = type if type else meta.mode
+                if viewing_timestamp is not None:
+                    meta.viewing_timestamp = viewing_timestamp
+                if speed is not None:
+                    meta.speed = speed
                 session.commit()
-                return    
+                return meta
         meta = session.get(AppMetadata, 1)
         meta.last_updated = datetime.now()
-        meta.mode = type if type is not None else meta.mode
+        meta.mode = type if type else meta.mode
+        if viewing_timestamp is not None:
+            meta.viewing_timestamp = viewing_timestamp
+        if speed is not None:
+            meta.speed = speed
         return meta
     
     def is_update(self, prev_timestamp):
@@ -264,7 +281,13 @@ class DBManager:
     def get_route_stations(self):
         """Get all route stations and their colors"""
         with self.Session_eng() as session:
-            routes = session.query(Route).all()
+            routes = (
+                session.query(Route)
+                .join(Station)
+                .order_by(Station.latitude.asc())  # south (low latitude) first, north last
+                .all()
+            )
+            # Dict preserves insertion order; latitude ascending yields south→north
             return {route.station_id: route.color for route in routes}
 
     def clear_route(self):
@@ -278,22 +301,25 @@ class DBManager:
 
     def get_closest_artifact(self, timestamp):
         with self.Session_eng() as session:
-                # Get distinct snapshot timestamps across all historic entries
-                rows = session.query(HistoricData.timestamp).distinct().all()
-                if not rows:
-                    return {}
-                # Find the closest timestamp to the requested one
-                closest_ts = min((r[0] for r in rows), key=lambda t: abs((t - timestamp).total_seconds()))
-                # Fetch all historic snapshots for that chosen timestamp, loading the Station relationship
-                snapshots = (
-                    session.query(HistoricData)
-                    .options(joinedload(HistoricData.station))
-                    .filter(HistoricData.timestamp == closest_ts)
-                    .all()
-                )
-
-                result = [x.to_dict() for x in snapshots]
-                return result
+            closest_timestamp_subquery = (
+                session.query(HistoricData.timestamp)
+                .distinct()
+                .order_by(func.abs(func.extract('epoch', HistoricData.timestamp - timestamp)))
+                .limit(1)
+                .scalar_subquery()
+            )            
+            # Fetch all historic snapshots for that closest timestamp
+            snapshots = (
+                session.query(HistoricData)
+                .options(joinedload(HistoricData.station))
+                .filter(HistoricData.timestamp == closest_timestamp_subquery)
+                .all()
+            )
+            
+            if not snapshots:
+                return []
+            
+            return [x.to_dict() for x in snapshots]
 
     def get_timestamp_range(self):
         """Get the min and max timestamps from historic_data"""
@@ -302,7 +328,7 @@ class DBManager:
                 func.min(HistoricData.timestamp),
                 func.max(HistoricData.timestamp)
             ).first()
-            if result and result[0] and result[1]:
+            if result and len(result) == 2:
                 return {'min': result[0], 'max': result[1]}
             return None
 
@@ -317,6 +343,86 @@ class DBManager:
                 'longitude': s.longitude,
                 'index': s.index
             } for s in stations]
+
+    def get_stations_by_distance(self, latitude, longitude, limit=None, filter_type=None) -> List[dict]:
+
+        with self.Session_eng() as session:
+            # Calculate Euclidean distance in lat/lon space
+            # For more accurate geographic distance, use sqrt((lat1-lat2)^2 + (lon1-lon2)^2)
+            # Note: This is approximate; for precise distances, use PostGIS ST_Distance
+            distance_expr = func.sqrt(
+                func.pow(Station.latitude - latitude, 2) + 
+                func.pow(Station.longitude - longitude, 2)
+            ).label('distance')
+            
+            query = (
+                session.query(Station, distance_expr))
+            
+            ##Get the closest one with bikes or docks if specified
+
+            if filter_type == 'bikes':
+                query = query.join(CurrentData).where(CurrentData.bikes_available > 0)
+            elif filter_type == 'docks':
+                query = query.join(CurrentData).where(CurrentData.docks_available > 0)
+            elif filter_type == 'ebikes':
+                query = query.join(CurrentData).where(CurrentData.ebikes_available > 0)
+            query = query.order_by(distance_expr)
+            
+            if limit:
+                query = query.limit(limit)            
+            
+            results = query.all()
+            return_list = [station.to_dict() for station, _ in results]
+            return return_list
+
+    def get_stations_near_segment(self, lat1, lon1, lat2, lon2, threshold_degrees):
+        with self.Session_eng() as session:
+            # Create bounding box for quick filtering
+            min_lat = min(lat1, lat2) - threshold_degrees
+            max_lat = max(lat1, lat2) + threshold_degrees
+            min_lon = min(lon1, lon2) - threshold_degrees
+            max_lon = max(lon1, lon2) + threshold_degrees
+            
+            # Vector from segment start to end
+            dx = lon2 - lon1
+            dy = lat2 - lat1
+            length_sq = dx * dx + dy * dy
+            
+            # Project station onto segment: t = dot(station - start, segment) / length_sq
+            # Clamp t to [0, 1] to stay on segment
+            t_expr = func.greatest(
+                0.0,
+                func.least(
+                    1.0,
+                    ((Station.longitude - lon1) * dx + (Station.latitude - lat1) * dy) / 
+                    func.greatest(length_sq, 0.0001)  # Avoid division by zero
+                )
+            )
+            
+            # Closest point on segment
+            closest_lat = lat1 + t_expr * dy
+            closest_lon = lon1 + t_expr * dx
+            
+            # Distance from station to closest point (Euclidean approximation)
+            dist_to_segment = func.sqrt(
+                func.pow(Station.latitude - closest_lat, 2) + 
+                func.pow(Station.longitude - closest_lon, 2)
+            )
+            
+            # Query stations in bounding box and within threshold distance
+            query = (
+                session.query(Station)
+                .filter(
+                    Station.latitude >= min_lat,
+                    Station.latitude <= max_lat,
+                    Station.longitude >= min_lon,
+                    Station.longitude <= max_lon,
+                    dist_to_segment <= threshold_degrees
+                )
+            )
+            
+            stations = query.all()
+            return [station.to_dict() for station in stations]
 
     def get_all_station_status(self):
         """Get status dict for all stations (for app.py compatibility)"""
@@ -334,7 +440,7 @@ class DBManager:
                     }
             return status_dict
 
-    def write_route_stations(self, route_stats, selected_route=None):
+    def save_route(self, route_stats, selected_route=None):
         """Write route stations and their colors to PostgreSQL
         
         Args:
@@ -394,57 +500,8 @@ class DBManager:
             if meta and meta.mode == ROUTE:
                 return meta.last_updated.timestamp()
             return 0.0
-
-    def check_clear_all_flag(self):
-        """Check if all LEDs should be cleared (returns True if we should clear)
         
-        Note: In PostgreSQL version, this is handled differently than Redis.
-        The driver should detect mode changes by tracking get_route_update_timestamp()
-        and checking if routes are empty. This method is kept for compatibility but
-        always returns False to avoid continuous clearing in LIVE mode.
-        """
-        return False
-
-    def clear_clear_all_flag(self):
-        """Clear the clear_all flag - no-op in PostgreSQL version
-        
-        This is kept for compatibility with driver.py but does nothing
-        since we don't use a separate flag in PostgreSQL.
-        """
-        pass
-
-def main():
-    """Main function to run the PostgreSQL manager"""
-    # Backwards-compatible alias: PostgresStationManager is a thin wrapper around DBManager
-    class PostgresStationManager(DBManager):
-        pass
-
-    manager = PostgresStationManager()
-
-    # Load initial data
-    manager.load_station_data()
-
-    print(f"\nStarting periodic updates every {UPDATE_INTERVAL} seconds...")
-    print("Press Ctrl+C to stop\n")
-
-    try:
-        while True:
-            manager.update_station_status()
-            time.sleep(UPDATE_INTERVAL)
-
-    except KeyboardInterrupt:
-        print("\n\n✓ Stopped PostgreSQL manager")
-        sys.exit(0)
-
-
 if __name__ == '__main__':
-    # Database connection settings
-    DB_HOST = 'localhost'
-    DB_PORT = 5432
-    DB_NAME = 'biketrack'
-    DB_USER = 'biketrack_user'
-    DB_PASSWORD = 'password'
-
     # GBFS URL
     STATION_STATUS_URL = "https://gbfs.citibikenyc.com/gbfs/en/station_status.json"
 
