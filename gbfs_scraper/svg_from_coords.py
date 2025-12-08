@@ -77,7 +77,9 @@ def project_points(
     return projected
 
 
-def bounds_from_points(points: List[Tuple[float, float]]) -> Tuple[float, float, float, float]:
+def bounds_from_points(
+    points: List[Tuple[float, float]],
+) -> Tuple[float, float, float, float]:
     lats = [p[0] for p in points]
     lons = [p[1] for p in points]
     return min(lats), max(lats), min(lons), max(lons)
@@ -138,9 +140,14 @@ def generate_svg(
         rot_angle = math.pi / 2 - theta
     else:
         rot_angle = 0.0
-        centroid = (sum([p[0] for p in poly_xy]) / len(poly_xy), sum([p[1] for p in poly_xy]) / len(poly_xy))
+        centroid = (
+            sum([p[0] for p in poly_xy]) / len(poly_xy),
+            sum([p[1] for p in poly_xy]) / len(poly_xy),
+        )
 
-    def rotate_about(center: Tuple[float, float], angle: float, pts: List[Tuple[float, float]]):
+    def rotate_about(
+        center: Tuple[float, float], angle: float, pts: List[Tuple[float, float]]
+    ):
         cx, cy = center
         c = math.cos(angle)
         s = math.sin(angle)
@@ -160,7 +167,9 @@ def generate_svg(
 
     # After rotation, re-fit the geometry into the SVG canvas (uniform scale)
     # to ensure everything is centered and visible
-    def fit_to_canvas(pts: List[Tuple[float, float]], w: int, h: int, padding: int = 20):
+    def fit_to_canvas(
+        pts: List[Tuple[float, float]], w: int, h: int, padding: int = 20
+    ):
         xs = [p[0] for p in pts]
         ys = [p[1] for p in pts]
         min_x, max_x = min(xs), max(xs)
@@ -175,7 +184,10 @@ def generate_svg(
         # center offsets
         x_offset = padding + (drawable_w - span_x * scale) / 2
         y_offset = padding + (drawable_h - span_y * scale) / 2
-        out = [((x - min_x) * scale + x_offset, (y - min_y) * scale + y_offset) for x, y in pts]
+        out = [
+            ((x - min_x) * scale + x_offset, (y - min_y) * scale + y_offset)
+            for x, y in pts
+        ]
         return out
 
     # Fit both polygon and points together to maintain consistent mapping
@@ -188,14 +200,19 @@ def generate_svg(
     if rotate_180:
         cx = width / 2.0
         cy = height / 2.0
-        def rotate_180_about_center(cx: float, cy: float, pts: List[Tuple[float, float]]):
+
+        def rotate_180_about_center(
+            cx: float, cy: float, pts: List[Tuple[float, float]]
+        ):
             return [(2 * cx - x, 2 * cy - y) for x, y in pts]
 
         poly_c = rotate_180_about_center(cx, cy, poly_c)
         points_c = rotate_180_about_center(cx, cy, points_c)
 
     # Build SVG document (basic namespacing)
-    svg = ET.Element("svg", xmlns="http://www.w3.org/2000/svg", width=str(width), height=str(height))
+    svg = ET.Element(
+        "svg", xmlns="http://www.w3.org/2000/svg", width=str(width), height=str(height)
+    )
 
     # Background
     # No background fill to keep SVG transparent by default
@@ -215,12 +232,23 @@ def generate_svg(
     # Draw points
     # Shrink point marker radius for better legibility in dense areas
     for (sid, lat, lon), (x, y) in zip(inside_points, points_c):
-        ET.SubElement(svg, "circle", cx=f"{x:.2f}", cy=f"{y:.2f}", r="2", fill="#d62728", stroke="#8b0000", **{"stroke-width": "0.5"})
+        ET.SubElement(
+            svg,
+            "circle",
+            cx=f"{x:.2f}",
+            cy=f"{y:.2f}",
+            r="2",
+            fill="#d62728",
+            stroke="#8b0000",
+            **{"stroke-width": "0.5"},
+        )
         # labels are optional; default is disabled to avoid cluttering the output
         if labels:
             # Optional label slightly offset from the point
             label = sid
-            ET.SubElement(svg, "text", x=f"{x+6:.2f}", y=f"{y-6:.2f}", fill="#333333").text = label
+            ET.SubElement(
+                svg, "text", x=f"{x+6:.2f}", y=f"{y-6:.2f}", fill="#333333"
+            ).text = label
 
     # Ensure output directory exists
     os.makedirs(os.path.dirname(out_file) or ".", exist_ok=True)
@@ -230,15 +258,28 @@ def generate_svg(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate SVG for Manhattan polygon and points inside")
-    parser.add_argument("--stations", default=None, help="Station input file (tab-separated station_id lat lon)")
+    parser = argparse.ArgumentParser(
+        description="Generate SVG for Manhattan polygon and points inside"
+    )
+    parser.add_argument(
+        "--stations",
+        default=None,
+        help="Station input file (tab-separated station_id lat lon)",
+    )
     parser.add_argument("--out-file", default="processed_data/manhattan_polygon.svg")
     parser.add_argument("--width", type=int, default=1200)
     parser.add_argument("--height", type=int, default=900)
-    parser.add_argument("--labels", action="store_true", help="Enable point labels (default: disabled)")
+    parser.add_argument(
+        "--labels", action="store_true", help="Enable point labels (default: disabled)"
+    )
     parser.add_argument("--dedupe", dest="dedupe", action="store_true")
     parser.add_argument("--no-dedupe", dest="dedupe", action="store_false")
-    parser.add_argument("--rotate-180", dest="rotate_180", action="store_true", help="Rotate final image 180 degrees (default: enabled)")
+    parser.add_argument(
+        "--rotate-180",
+        dest="rotate_180",
+        action="store_true",
+        help="Rotate final image 180 degrees (default: enabled)",
+    )
     parser.add_argument("--no-rotate-180", dest="rotate_180", action="store_false")
     parser.set_defaults(dedupe=True)
     parser.set_defaults(rotate_180=True)

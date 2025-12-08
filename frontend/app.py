@@ -6,6 +6,8 @@ from streamlit_folium import st_folium
 from geopy.geocoders import Nominatim
 import googlemaps
 import polyline
+
+
 from redis_manager import RedisStationManager
 from API_Config import GOOGLE_MAPS
 
@@ -109,6 +111,7 @@ def find_closest_station_with_bikes(origin_coords, stations_df, gbfs_status, min
                 if distance <= search_radius_meters:
                     available_stations.append({
                         'station_id': station_id,
+                        'name': station.get('name', ''),
                         'latitude': station['latitude'],
                         'longitude': station['longitude'],
                         'distance': distance,
@@ -154,6 +157,7 @@ def find_closest_station_with_docks(destination_coords, stations_df, gbfs_status
                 if distance <= search_radius_meters:
                     available_stations.append({
                         'station_id': station_id,
+                        'name': station.get('name', ''),
                         'latitude': station['latitude'],
                         'longitude': station['longitude'],
                         'distance': distance,
@@ -638,6 +642,8 @@ def main():
                     
                     if start_station:
                         st.success("**🚲 Start Station**")
+                        if start_station.get('name'):
+                            st.write(f"**{start_station['name']}**")
                         st.write(f"**Distance:** {start_station['distance']:.0f}m from origin")
                         if bike_type_value == 'ebike':
                             st.write(f"**E-bikes:** {start_station['ebikes_available']}")
@@ -653,7 +659,9 @@ def main():
                     
                     if end_station:
                         st.info("**🅿️ End Station**")
-                        st.write(f"**Distance:** {end_station['distance']:.0f}m from destination")
+                        if end_station.get('name'):
+                            st.write(f"**{end_station['name']}**")
+                            st.write(f"**Distance:** {end_station['distance']:.0f}m from destination")
                         st.write(f"**Docks Available:** {end_station['docks_available']}")
                     else:
                         st.warning("⚠️ No stations with docks found near destination")

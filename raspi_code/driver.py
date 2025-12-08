@@ -131,19 +131,15 @@ def get_data(last_update_ts, last_route_ts):
             # Get previous values to determine color
             prev_bikes = station_data.get('prev_bikes_available', bikes_available)
             prev_ebikes = station_data.get('prev_ebikes_available', ebikes_available)
-            
             # Determine color based on change
-            if bikes_available < prev_bikes:
-                # Bikes decreased - someone took a bike (red)
-                UPDATE_LIST.append((position, COLOR_MAP["red"]))
+            color = COLOR_MAP["red"]
+            if ebikes_available > prev_ebikes:
+                # Ebike returned (green)
+                color = COLOR_MAP["green"]
             elif bikes_available > prev_bikes:
-                # Bikes increased - someone returned a bike
-                if ebikes_available > prev_ebikes:
-                    # Ebike returned (green)
-                    UPDATE_LIST.append((position, COLOR_MAP["green"]))
-                else:
-                    # Regular bike returned (blue)
-                    UPDATE_LIST.append((position, COLOR_MAP["blue"]))
+                # Regular bike returned (blue)
+                color = COLOR_MAP["blue"]
+            UPDATE_LIST.append((position, color, bikes_available, ebikes_available))
     
     # Return normal operation - route_update=False
     return (True, False, current_time, last_route_ts)
@@ -168,7 +164,7 @@ def update_leds(route_render=False):
         # Sort UPDATE_LIST by latitude (south to north) for progressive rendering
         # Get station data for each LED to sort by latitude
         stations_with_positions = []
-        for (led_idx, color_rgb) in UPDATE_LIST:
+        for (led_idx, color_rgb, *_) in UPDATE_LIST:
             # Find the station by index to get its latitude
             all_stations = redis_manager.get_all_stations()
             for station_data in all_stations:
@@ -188,18 +184,24 @@ def update_leds(route_render=False):
             LEDS[station_info['led_idx']] = station_info['color']
             time.sleep(0.5)  # 500ms delay between each LED Update        
         UPDATE_LIST.clear()
+    
     elif len(UPDATE_LIST) > 0:
         print(f"Blinking mode: Updating {len(UPDATE_LIST)} stations")
         # Normal blinking mode for station updates
         for _ in range(NUM_BLINKS):
-            for (led_idx, j) in UPDATE_LIST:
+            for (led_idx, j, *_) in UPDATE_LIST:
                 LEDS[led_idx] = (0, 0, 0)
             time.sleep(BLINK_DURATION / 2)
-            for (led_idx, j) in UPDATE_LIST:
+            for (led_idx, j, *_) in UPDATE_LIST:
                 LEDS[led_idx] = j
             time.sleep(BLINK_DURATION / 2)
-            #Leave them on the last color, though this behavior could be customized
-
+        for (led_idx, j, num_bikes, num_ebikes) in UPDATE_LIST:
+            brightness = max(num_bikes, 25.5) * 10   
+            if num_ebikes > 0:
+                LEDS[led_idx] = brightness * (0,1,0) 
+            else:
+                LEDS[led_idx] = brightness * (0,0,1)
+            print(f"LED {led_idx}: Bikes={num_bikes}, Ebikes={num_ebikes}")
         UPDATE_LIST.clear()
 
 if __name__ == '__main__':
