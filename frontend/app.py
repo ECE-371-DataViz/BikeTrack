@@ -503,6 +503,10 @@ def get_directions(o, d, num_routes):
     
     return directions
 
+def get_regular_bikes_count(bikes_available, ebikes_available):
+    """Calculate number of regular (non-electric) bikes"""
+    return bikes_available - ebikes_available
+
 def get_color_for_availability(bikes_available, ebikes_available, docks_available):
     """Get color based on availability (matching driver.py logic)"""
     # Green for ebikes available
@@ -529,7 +533,7 @@ def add_general_view_stations(m, stations_df, gbfs_status):
             bikes = status['bikes_available']
             ebikes = status['ebikes_available']
             docks = status['docks_available']
-            regular_bikes = bikes - ebikes
+            regular_bikes = get_regular_bikes_count(bikes, ebikes)
             
             # Get color based on availability
             color = get_color_for_availability(bikes, ebikes, docks)
@@ -576,7 +580,7 @@ def add_historic_view_stations(m, stations_df, historic_data):
             bikes = historic['bikes_available']
             ebikes = historic['ebikes_available']
             docks = historic['docks_available']
-            regular_bikes = bikes - ebikes
+            regular_bikes = get_regular_bikes_count(bikes, ebikes)
             
             # Get color based on availability
             color = get_color_for_availability(bikes, ebikes, docks)

@@ -61,8 +61,9 @@ class Station(Base):
                 'ebikes_available': self.current_data.ebikes_available,
                 'last_updated': self.current_data.last_updated,
                 'update_timestamp': self.current_data.last_updated.timestamp(),  # For driver.py compatibility
-                'prev_bikes_available': 0,  # Driver.py compatibility - not tracked in current schema
-                'prev_ebikes_available': 0,  # Driver.py compatibility - not tracked in current schema
+                # Note: prev_* fields not tracked in current schema - driver.py LED blinking may not work as expected
+                'prev_bikes_available': 0,  # Driver.py compatibility - would need schema update for real tracking
+                'prev_ebikes_available': 0,  # Driver.py compatibility - would need schema update for real tracking
             })
         return result
 
@@ -396,17 +397,20 @@ class DBManager:
 
     def check_clear_all_flag(self):
         """Check if all LEDs should be cleared (returns True if we should clear)
-        This happens when mode changes from ROUTE to LIVE
+        
+        Note: In PostgreSQL version, this is handled differently than Redis.
+        The driver should detect mode changes by tracking get_route_update_timestamp()
+        and checking if routes are empty. This method is kept for compatibility but
+        always returns False to avoid continuous clearing in LIVE mode.
         """
-        # In PostgreSQL version, we don't need a separate flag
-        # Just check if there are no route stations
-        with self.Session_eng() as session:
-            route_count = session.query(Route).count()
-            meta = session.get(AppMetadata, 1)
-            return route_count == 0 and meta and meta.mode == LIVE
+        return False
 
     def clear_clear_all_flag(self):
-        """Clear the clear_all flag - no-op in PostgreSQL version"""
+        """Clear the clear_all flag - no-op in PostgreSQL version
+        
+        This is kept for compatibility with driver.py but does nothing
+        since we don't use a separate flag in PostgreSQL.
+        """
         pass
 
 def main():
