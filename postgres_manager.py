@@ -60,6 +60,9 @@ class Station(Base):
                 'docks_available': self.current_data.docks_available,
                 'ebikes_available': self.current_data.ebikes_available,
                 'last_updated': self.current_data.last_updated,
+                'update_timestamp': self.current_data.last_updated.timestamp(),  # For driver.py compatibility
+                'prev_bikes_available': 0,  # Driver.py compatibility - not tracked in current schema
+                'prev_ebikes_available': 0,  # Driver.py compatibility - not tracked in current schema
             })
         return result
 
@@ -380,6 +383,31 @@ class DBManager:
             return True
         except Exception:
             return False
+
+    def get_route_update_timestamp(self):
+        """Get the timestamp of the last route update
+        Returns the last_updated timestamp when mode is ROUTE
+        """
+        with self.Session_eng() as session:
+            meta = session.get(AppMetadata, 1)
+            if meta and meta.mode == ROUTE:
+                return meta.last_updated.timestamp()
+            return 0.0
+
+    def check_clear_all_flag(self):
+        """Check if all LEDs should be cleared (returns True if we should clear)
+        This happens when mode changes from ROUTE to LIVE
+        """
+        # In PostgreSQL version, we don't need a separate flag
+        # Just check if there are no route stations
+        with self.Session_eng() as session:
+            route_count = session.query(Route).count()
+            meta = session.get(AppMetadata, 1)
+            return route_count == 0 and meta and meta.mode == LIVE
+
+    def clear_clear_all_flag(self):
+        """Clear the clear_all flag - no-op in PostgreSQL version"""
+        pass
 
 def main():
     """Main function to run the PostgreSQL manager"""

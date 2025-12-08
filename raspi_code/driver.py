@@ -2,7 +2,17 @@
 # Pi specific imports
 ##
 import time
-from redis_manager import RedisStationManager
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from postgres_manager import DBManager
+
+# Database connection settings
+DB_HOST = os.getenv('DB_HOST', 'localhost')
+DB_PORT = int(os.getenv('DB_PORT', 5432))
+DB_NAME = os.getenv('DB_NAME', 'biketrack')
+DB_USER = os.getenv('DB_USER', 'biketrack_user')
+DB_PASSWORD = os.getenv('DB_PASSWORD', 'password')
 
 # Constants
 COLOR_MAP = {
@@ -20,23 +30,23 @@ NUM_BLINKS = 3
 BLINK_DURATION = 0.5
 UPDATE_RATE = 1  # Seconds between update
 
-# Redis manager instance
-redis_manager = RedisStationManager()
+# PostgreSQL manager instance
+db_manager = DBManager(DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD)
 
 
-def load_stations_from_redis():
-    """Verify Redis connection and station data"""
-    stations = redis_manager.get_all_stations()
+def load_stations_from_db():
+    """Verify PostgreSQL connection and station data"""
+    stations = db_manager.get_all_stations()
     count = len(stations)
-    print(f"Verified {count} stations in Redis")
+    print(f"Verified {count} stations in PostgreSQL")
     return count
 
 def get_route_stations():
-    """Get route stations and their colors from Redis"""
-    return redis_manager.get_route_stations()
+    """Get route stations and their colors from PostgreSQL"""
+    return db_manager.get_route_stations()
 
 def get_data(last_update_ts, last_route_ts):
-    """Get updated station data from Redis using timestamp-based tracking
+    """Get updated station data from PostgreSQL using timestamp-based tracking
     
     Args:
         last_update_ts: Last timestamp we checked for station updates
@@ -47,16 +57,16 @@ def get_data(last_update_ts, last_route_ts):
     """
     global IN_ROUTE_MODE
     # Check if all LEDs should be cleared
-    if redis_manager.check_clear_all_flag():
+    if db_manager.check_clear_all_flag():
         print("Clearing all LEDs - returning to blinking mode")
-        redis_manager.clear_clear_all_flag()
+        db_manager.clear_clear_all_flag()
         IN_ROUTE_MODE = False  # Exit route mode
         # Don't add anything to UPDATE_LIST - just clear
         # Return True for route_update to trigger clear behavior
         return (True, True, time.time(), 0.0)  # Reset route tracking
     
-    # Get current route update timestamp from Redis
-    current_route_ts = redis_manager.get_route_update_timestamp()
+    # Get current route update timestamp from PostgreSQL
+    current_route_ts = db_manager.get_route_update_timestamp()
     
     # Check if route has been updated since we last checked
     if current_route_ts > last_route_ts:
@@ -75,12 +85,12 @@ def get_data(last_update_ts, last_route_ts):
         IN_ROUTE_MODE = True
         
         # Add route stations to update list
-        print(f"Processing {len(route_stations)} route stations from Redis")
+        print(f"Processing {len(route_stations)} route stations from PostgreSQL")
         stations_found = 0
         stations_missing = 0
         
         for station_id, color in route_stations.items():
-            station_data = redis_manager.get_station(station_id)
+            station_data = db_manager.get_station(station_id)
             if station_data:
                 position = station_data['index']
                 # Convert hex color to RGB (colors from app.py are hex codes like #0077be)
@@ -116,7 +126,7 @@ def get_data(last_update_ts, last_route_ts):
     current_time = time.time()
     
     # Get all stations and check for updates since last check
-    all_stations = redis_manager.get_all_stations()
+    all_stations = db_manager.get_all_stations()
     
     for station_data in all_stations:
         station_id = station_data['station_id']
@@ -166,7 +176,7 @@ def update_leds(route_render=False):
         stations_with_positions = []
         for (led_idx, color_rgb, *_) in UPDATE_LIST:
             # Find the station by index to get its latitude
-            all_stations = redis_manager.get_all_stations()
+            all_stations = db_manager.get_all_stations()
             for station_data in all_stations:
                 if station_data['index'] == led_idx:
                     stations_with_positions.append({
@@ -205,8 +215,8 @@ def update_leds(route_render=False):
         UPDATE_LIST.clear()
 
 if __name__ == '__main__':
-    print("Loading stations from Redis...")
-    load_stations_from_redis()
+    print("Loading stations from PostgreSQL...")
+    load_stations_from_db()
     
     print(f"Starting LED update loop (every {UPDATE_RATE} seconds)...")
     print("Press Ctrl+C to stop\n")
