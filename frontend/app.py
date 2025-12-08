@@ -11,12 +11,8 @@ from datetime import datetime
 
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from postgres_manager import DBManager
-try:
-    from API_Config import GOOGLE_MAPS
-except ImportError:
-    GOOGLE_MAPS = os.getenv('GOOGLE_MAPS_API_KEY', '')
+from API_Config import GOOGLE_MAPS
 
 def haversine_distance(lat1, lon1, lat2, lon2):
     R = 6371000
