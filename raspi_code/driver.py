@@ -11,16 +11,17 @@ COLOR_MAP = {
     "red": (255, 0, 0),
     "green": (0, 255, 0),
     "blue": (0, 0, 255),
-    "white": (255, 255, 255)
+    "white": (255, 255, 255),
 }
+
 
 def hex_to_rgb(color_hex, default_color=COLOR_MAP["white"]):
     """Convert a hex color string (e.g., '#0077be') to an RGB tuple."""
-    stripped = color_hex.lstrip('#')
+    stripped = color_hex.lstrip("#")
     if len(stripped) != 6:
         return default_color
     try:
-        return tuple(int(stripped[i:i+2], 16) for i in (0, 2, 4))
+        return tuple(int(stripped[i : i + 2], 16) for i in (0, 2, 4))
     except ValueError:
         return default_color
 
@@ -35,35 +36,42 @@ UPDATE_RATE = 1  # Seconds between update
 # PostgreSQL manager instance
 db_manager = DBManager(DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD)
 
+
 def init_live():
     stations = db_manager.get_all_stations()
     base_state = {}
     for station in stations:
-        station_id = station['station_id']
+        station_id = station["station_id"]
         base_state[station_id] = station
-        index = station['index']
+        index = station["index"]
         color = get_color(station)
         LEDS[index] = color
     return base_state
 
 
 def get_color(station):
-    base = (0, 0, 0)
-    brightness = int(max(station['bikes_available'], 25.5) * 10)
-    if station['ebikes_available'] > 0:
+    # Turn off LED if station has no bikes and no docks (out of service)
+    if station["bikes_available"] == 0 and station["docks_available"] == 0:
+        return (0, 0, 0)
+    base = COLOR_MAP["red"]
+    brightness = int(max(station["docks_available"], 25.5) * 10)
+    # Green if more than 10% of bikes are ebikes
+    if station["bikes_available"] > 0 and (station["ebikes_available"] / station["bikes_available"]) > 0.1:
         base = COLOR_MAP["green"]
-    if station['bikes_available'] > 0:
+        brightness = int(max(station["bikes_available"], 25.5) * 10)
+    elif station["bikes_available"] > 0:
         base = COLOR_MAP["blue"]
+        brightness = int(max(station["bikes_available"], 25.5) * 10)
 
     return (base[0] * brightness, base[1] * brightness, base[2] * brightness)
 
 
 def diff(current, new):
-    if current['ebikes_available'] < new['ebikes_available']:
+    if current["ebikes_available"] < new["ebikes_available"]:
         return COLOR_MAP["green"]
-    if current['bikes_available'] < new['bikes_available']:
+    if current["bikes_available"] < new["bikes_available"]:
         return COLOR_MAP["blue"]
-    if current['docks_available'] < new['docks_available']:
+    if current["docks_available"] < new["docks_available"]:
         return COLOR_MAP["red"]
     return None
 
@@ -83,48 +91,51 @@ def live_mode(current_state):
     stations = db_manager.get_all_stations()
     update_list = {}
     for station in stations:
-        station_id = station['station_id']
+        station_id = station["station_id"]
         blink_color = diff(current_state[station_id], station)
         if blink_color:
-            position = station['index']
+            position = station["index"]
             update_list[position] = (blink_color, station)
         current_state[station_id] = station
     blink(update_list)
     for station in current_state:
         station_data = current_state[station]
-        position = station_data['index']
+        position = station_data["index"]
         color = get_color(station_data)
         LEDS[position] = color
 
     return current_state
+
 
 ##Assume completely dark backdrop
 def route_mode():
     stations = db_manager.get_route_stations()
     for station in stations:
-        color = hex_to_rgb(station['color'], COLOR_MAP["white"])
-        index = station['index']
+        color = hex_to_rgb(station["color"], COLOR_MAP["white"])
+        index = station["index"]
         LEDS[index] = color
         ##Slowly light up each LED from bottom to top
         time.sleep(0.1)
+
 
 def historic_mode(current_state, timestamp):
     stations = db_manager.get_closest_artifact(timestamp)
     update_list = {}
     for station in stations:
-        station_id = station['station_id']
+        station_id = station["station_id"]
         blink_color = diff(current_state[station_id], station)
         if blink_color:
-            position = station['index']
+            position = station["index"]
             update_list[position] = blink_color
         current_state[station_id] = station
     blink(update_list)
     for station in current_state:
         station_data = current_state[station]
-        position = station_data['index']
+        position = station_data["index"]
         color = get_color(station_data)
         LEDS[position] = color
     return current_state
+
 
 def clear_all_leds():
     """Clear all LEDs to black"""
@@ -133,15 +144,11 @@ def clear_all_leds():
 
 
 ## Blinks them, and then leaves them on the last color
-if __name__ == '__main__':
+if __name__ == "__main__":
     print("Loading stations from PostgreSQL...")
     init_live()
 
-    mode_matcher = {
-        LIVE: live_mode,
-        ROUTE: route_mode,
-        HISTORIC: historic_mode
-    }
+    mode_matcher = {LIVE: live_mode, ROUTE: route_mode, HISTORIC: historic_mode}
     state = db_manager.get_metadata()
     mode = state.mode
     timestamp = datetime.now()
@@ -161,6 +168,6 @@ if __name__ == '__main__':
             if mode == LIVE:
                 state = live_mode(state)
             elif mode == ROUTE:
-                route_mode()        
+                route_mode()
             time_dormant = max(0, UPDATE_RATE - (time.time() - s_time))
             time.sleep(time_dormant)
