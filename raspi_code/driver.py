@@ -48,9 +48,8 @@ def init_live():
     for station in stations:
         station_id = station["station_id"]
         base_state[station_id] = station
-        index = station["index"]
+        index = station["index"] - 1 
         color = get_color(station)
-        print(index)
         LEDS[index] = color
     LEDS.show()
     return base_state
@@ -101,13 +100,13 @@ def live_mode(current_state):
         station_id = station["station_id"]
         blink_color = diff(current_state[station_id], station)
         if blink_color:
-            position = station["index"]
+            position = station["index"] - 1
             update_list[position] = (blink_color, station)
         current_state[station_id] = station
     blink(update_list)
     for station in current_state:
         station_data = current_state[station]
-        position = station_data["index"]
+        position = station_data["index"] - 1
         color = get_color(station_data)
         LEDS[position] = color
     LEDS.show()
@@ -119,7 +118,7 @@ def route_mode():
     stations = db_manager.get_route_stations()
     for station in stations:
         color = hex_to_rgb(station["color"], COLOR_MAP["white"])
-        index = station["index"]
+        index = station["index"] - 1
         LEDS[index] = color
         ##Slowly light up each LED from bottom to top
         time.sleep(0.1)
@@ -132,13 +131,13 @@ def historic_mode(current_state, timestamp):
         station_id = station["station_id"]
         blink_color = diff(current_state[station_id], station)
         if blink_color:
-            position = station["index"]
+            position = station["index"] - 1
             update_list[position] = blink_color
         current_state[station_id] = station
     blink(update_list)
     for station in current_state:
         station_data = current_state[station]
-        position = station_data["index"]
+        position = station_data["index"] - 1
         color = get_color(station_data)
         LEDS[position] = color
     LEDS.show()
