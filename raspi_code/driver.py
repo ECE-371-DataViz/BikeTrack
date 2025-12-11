@@ -1,5 +1,8 @@
 ###
 # Pi specific imports
+import board
+import neopixel
+
 ##
 from datetime import datetime, timedelta
 import time
@@ -14,6 +17,8 @@ COLOR_MAP = {
     "white": (255, 255, 255),
 }
 
+LEDS = neopixel.NeoPixel(board.D18, 655, auto_write=False)
+
 
 def hex_to_rgb(color_hex, default_color=COLOR_MAP["white"]):
     """Convert a hex color string (e.g., '#0077be') to an RGB tuple."""
@@ -25,9 +30,8 @@ def hex_to_rgb(color_hex, default_color=COLOR_MAP["white"]):
     except ValueError:
         return default_color
 
-
 # The LED behavior depends on the driver itself...
-LEDS = [0] * 700  # placeholder for LED strip
+# LEDS = [0] * 700  # placeholder for LED strip
 NUM_BLINKS = 3
 BLINK_DURATION = 0.5
 UPDATE_RATE = 1  # Seconds between update
@@ -139,18 +143,17 @@ def historic_mode(current_state, timestamp):
 
 def clear_all_leds():
     """Clear all LEDs to black"""
-    for i in range(len(LEDS)):
-        LEDS[i] = (0, 0, 0)
-
+    LEDS.fill((0,0,0))
 
 ## Blinks them, and then leaves them on the last color
 if __name__ == "__main__":
     print("Loading stations from PostgreSQL...")
     init_live()
-
+    clear_all_leds()
     mode_matcher = {LIVE: live_mode, ROUTE: route_mode, HISTORIC: historic_mode}
     state = db_manager.get_metadata()
     mode = state.mode
+    current_state = db_manager.get_all_station_status()
     timestamp = datetime.now()
     while True:
         s_time = time.time()
@@ -166,7 +169,7 @@ if __name__ == "__main__":
                 time.sleep(state.speed)
         else:
             if mode == LIVE:
-                state = live_mode(state)
+                current_state = live_mode(current_state)
             elif mode == ROUTE:
                 route_mode()
             time_dormant = max(0, UPDATE_RATE - (time.time() - s_time))

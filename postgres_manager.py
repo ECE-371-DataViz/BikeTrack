@@ -297,7 +297,6 @@ class DBManager:
                         ebikes_available=current.ebikes_available,
                     )
                     session.add(historic)
-                    print("Archiving historic data...")
 
             self.update_metadata(session)
             session.commit()
@@ -556,14 +555,18 @@ if __name__ == "__main__":
     # Update interval in seconds
     manager = DBManager(DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD)
     manager.initial_load()
-    last_archive = datetime.now() - timedelta(minutes=HISTORY_PERIOD)
+    last_archive = datetime.now()
     station_status_url = (
         "https://gbfs.lyft.com/gbfs/2.3/bkn/en/station_status.json"
     )
     while True:
         time_diff = (datetime.now() - last_archive).total_seconds() / 60.0
+        archive = time_diff >= HISTORY_PERIOD
+        if archive:
+            last_archive = datetime.now()
+            print(f"Archiving historic data at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}...")
         num_updated = manager.update_stations(
-            url=station_status_url, archive=time_diff >= HISTORY_PERIOD
+            url=station_status_url, archive=archive
         )
-        print(f'Updated {num_updated} stations...')
+        print(f'Updated {num_updated} stations at {datetime.now().strftime("%H:%M:%S")}')
         time.sleep(UPDATE_INTERVAL)

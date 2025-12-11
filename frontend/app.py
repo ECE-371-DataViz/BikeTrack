@@ -49,6 +49,8 @@ def closest_avail_station(coords, type="bikes"):
     lat, lon = coords
     stations = db_manager.get_stations_by_distance(
         lat, lon, limit=1, filter_type=type)
+    if not stations:
+        return None
     station = stations[0]
     distance_meters = haversine_distance(
         lat, lon, station["latitude"], station["longitude"]
@@ -71,14 +73,60 @@ def geocode(address: str):
     return (loc.latitude, loc.longitude)
 
 
-def render_routes(map, paths, start, end, stations, selected_route=None, route_type="bikes"):
+def render_routes(map, paths, start, end, stations, selected_route=None, route_type="bikes", start_station=None, end_station=None):
+    """Render routes and label origin/destination stations.
+
+    start_station and end_station are optional dicts that include station metadata
+    (name, bikes_available, ebikes_available, docks_available). If provided,
+    use station coordinates & build a detailed popup. Otherwise fall back to
+    the supplied start/end coordinates.
+    """
     start_color = "green" if route_type == "ebikes" else "blue"
-    folium.Marker(
-        start, popup="Origin", icon=folium.Icon(color=start_color, icon="play")
-    ).add_to(map)
-    folium.Marker(
-        end, popup="Destination", icon=folium.Icon(color="red", icon="stop")
-    ).add_to(map)
+    # Build origin popup
+    if start_station:
+        start_location = (start_station["latitude"], start_station["longitude"]) if isinstance(start_station.get("latitude"), (int, float)) else start
+        regular = get_regular_bikes_count(start_station.get("bikes_available", 0), start_station.get("ebikes_available", 0))
+        start_popup = f"""
+        <div style=\"font-family: Arial, sans-serif; min-width: 150px;\">
+            <b>{start_station.get('name', start_station.get('station_id', 'Origin'))}</b><br>
+            <hr style=\"margin: 5px 0;\">
+            🚲 Bikes (total): {start_station.get('bikes_available', 0)}<br>
+            ⚡ E-bikes: {start_station.get('ebikes_available', 0)}<br>
+            🚴 Regular Bikes: {regular}
+        </div>
+        """
+        folium.Marker(
+            start_location,
+            popup=folium.Popup(start_popup, max_width=300),
+            icon=folium.Icon(color=start_color, icon="play"),
+        ).add_to(map)
+    else:
+        folium.Marker(
+            start, popup="Origin", icon=folium.Icon(color=start_color, icon="play")
+        ).add_to(map)
+
+    # Build destination popup
+    if end_station:
+        end_location = (end_station["latitude"], end_station["longitude"]) if isinstance(end_station.get("latitude"), (int, float)) else end
+        regular_end = get_regular_bikes_count(end_station.get("bikes_available", 0), end_station.get("ebikes_available", 0))
+        end_popup = f"""
+        <div style=\"font-family: Arial, sans-serif; min-width: 150px;\">
+            <b>{end_station.get('name', end_station.get('station_id', 'Destination'))}</b><br>
+            <hr style=\"margin: 5px 0;\">
+            🚲 Bikes (total): {end_station.get('bikes_available', 0)}<br>
+            ⚡ E-bikes: {end_station.get('ebikes_available', 0)}<br>
+            🚴 Regular Bikes: {regular_end}
+        </div>
+        """
+        folium.Marker(
+            end_location,
+            popup=folium.Popup(end_popup, max_width=300),
+            icon=folium.Icon(color="red", icon="stop"),
+        ).add_to(map)
+    else:
+        folium.Marker(
+            end, popup="Destination", icon=folium.Icon(color="red", icon="stop")
+        ).add_to(map)
     path_idxs = range(len(paths))
     if selected_route:
         path_idxs = [selected_route - 1]
@@ -491,7 +539,7 @@ def main():
     m = folium.Map(
         location=[40.7589, -73.9851],  # Manhattan center
         zoom_start=13,
-        tiles="OpenStreetMap"
+        tiles="CartoDB dark_matter",
     )
     
     # Render map based on selected mode
@@ -547,7 +595,9 @@ def main():
                 render_routes(
                     m, paths, o_c, d_c, stations, 
                     st.session_state.get("selected_route"), 
-                    bike_type_value
+                    bike_type_value,
+                    start_station=start_station,
+                    end_station=end_station,
                 )
                 # Show route info
                 st.subheader("Route Information")
@@ -582,7 +632,7 @@ def main():
             st.error("Could not load station data")
     
     # Display the map
-    st_folium(m, use_container_width=True, returned_objects=[])
+    st_folium(m, use_container_width=True, height=1200, returned_objects=[])
 
 if __name__ == "__main__":
     init_session_states()
