@@ -60,16 +60,16 @@ def get_color(station):
     if station["bikes_available"] == 0 and station["docks_available"] == 0:
         return (0, 0, 0)
     
-    base = COLOR_MAP["red"][:] / 255
-    brightness = int(min(station["docks_available"], 25.5) * 10)
+    base = COLOR_MAP["red"]
+    brightness = min(station["docks_available"], 25.5) * 10
     # Green if more than 10% of bikes are ebikes
     if station["bikes_available"] > 0 and (station["ebikes_available"] / station["bikes_available"]) > 0.1:
-        base = COLOR_MAP["green"][:] / 255
-        brightness = int(min(station["bikes_available"], 25.5) * 10)
+        base = COLOR_MAP["green"]
+        brightness = min(station["bikes_available"], 25.5) * 10
     elif station["bikes_available"] > 0:
-        base = COLOR_MAP["blue"][:] / 255
-        brightness = int(min(station["bikes_available"], 25.5) * 10)
-    return base * brightness
+        base = COLOR_MAP["blue"]
+        brightness = min(station["bikes_available"], 25.5) * 10
+    return [int(b * brightness / 255) for b in base]
 
 
 def diff(current, new):
