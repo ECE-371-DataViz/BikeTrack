@@ -17,7 +17,7 @@ COLOR_MAP = {
     "white": (255, 255, 255),
     "blank": (0, 0, 0),
 }
-N_LEDS = 655
+N_LEDS = 665
 LEDS = neopixel.NeoPixel(board.D18, N_LEDS, brightness=0.05, auto_write=False)
 
 def hex_to_rgb(color_hex, default_color=COLOR_MAP["white"]):
@@ -149,6 +149,7 @@ def historic_mode(current_state, timestamp):
 
 def clear_all_leds():
     """Clear all LEDs to black"""
+    print("Clearing all LEDs...")
     LEDS.fill(COLOR_MAP["blank"])
     LEDS.show()
 
@@ -166,9 +167,11 @@ if __name__ == "__main__":
         s_time = time.time()
         state = db_manager.get_metadata()
         if state.mode != mode:
+            print("Mode changed from", mode, "to", state.mode)
             mode = state.mode
             clear_all_leds()
         if mode == HISTORIC:
+            print("In Historic Mode")
             if state.viewing_timestamp != timestamp:
                 timestamp = state.viewing_timestamp
                 historic_mode(state, timestamp)
