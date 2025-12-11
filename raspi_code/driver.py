@@ -48,7 +48,7 @@ def init_live():
     for station in stations:
         station_id = station["station_id"]
         base_state[station_id] = station
-        index = station["index"] - 1 
+        index = station["index"] 
         color = get_color(station)
         LEDS[index] = color
     LEDS.show()
@@ -89,7 +89,10 @@ def blink(update_list):
             LEDS[position] = color
         LEDS.show()
         time.sleep(BLINK_DURATION / 2)
-        clear_all_leds()
+        for position in update_list:
+            LEDS[position] = COLOR_MAP["blank"]
+        LEDS.show()
+        # clear_all_leds()
         time.sleep(BLINK_DURATION / 2)
 
 
@@ -100,13 +103,13 @@ def live_mode(current_state):
         station_id = station["station_id"]
         blink_color = diff(current_state[station_id], station)
         if blink_color:
-            position = station["index"] - 1
+            position = station["index"]
             update_list[position] = (blink_color, station)
         current_state[station_id] = station
     blink(update_list)
     for station in current_state:
         station_data = current_state[station]
-        position = station_data["index"] - 1
+        position = station_data["index"]
         color = get_color(station_data)
         LEDS[position] = color
     LEDS.show()
@@ -118,7 +121,7 @@ def route_mode():
     stations = db_manager.get_route_stations()
     for station in stations:
         color = hex_to_rgb(station["color"], COLOR_MAP["white"])
-        index = station["index"] - 1
+        index = station["index"]
         LEDS[index] = color
         ##Slowly light up each LED from bottom to top
         time.sleep(0.1)
@@ -131,13 +134,13 @@ def historic_mode(current_state, timestamp):
         station_id = station["station_id"]
         blink_color = diff(current_state[station_id], station)
         if blink_color:
-            position = station["index"] - 1
+            position = station["index"]
             update_list[position] = blink_color
         current_state[station_id] = station
     blink(update_list)
     for station in current_state:
         station_data = current_state[station]
-        position = station_data["index"] - 1
+        position = station_data["index"]
         color = get_color(station_data)
         LEDS[position] = color
     LEDS.show()
