@@ -1,10 +1,11 @@
 streamlit
-streamlit - folium
+streamlit-folium
 shapely
 folium
 googlemaps
 polyline
 geopy
-redis
 pandas
 requests
+sqlalchemy
+psycopg2-binary
