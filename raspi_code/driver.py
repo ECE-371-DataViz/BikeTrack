@@ -121,14 +121,22 @@ def live_mode(current_state):
 
 ##Assume completely dark backdrop
 def route_mode():
-    stations = db_manager.get_route_stations()
-    for station in stations:
-        color = hex_to_rgb(station["color"], COLOR_MAP["white"])
+    # get_route_stations() returns a dict mapping station_id -> color_hex
+    route_map = db_manager.get_route_stations()
+    # Build a station lookup table by station_id for quick access
+    all_stations = db_manager.get_all_stations()
+    station_map = {s["station_id"]: s for s in all_stations}
+    clear_all_leds()
+    for station_id, color_hex in route_map.items():
+        station = station_map.get(station_id)
+        if not station:
+            continue
         index = station["index"]
+        color = hex_to_rgb(color_hex, COLOR_MAP["white"])
         LEDS[index] = color
-        ##Slowly light up each LED from bottom to top
+        LEDS.show()
+        # Slowly light up each LED from bottom to top
         time.sleep(0.1)
-
 
 def historic_mode(current_state, timestamp):
     stations = db_manager.get_closest_artifact(timestamp)
