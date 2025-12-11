@@ -106,6 +106,7 @@ def live_mode(current_state):
             position = station["index"]
             update_list[position] = (blink_color, station)
         current_state[station_id] = station
+    print("Updating", len(update_list), "stations")
     blink(update_list)
     for station in current_state:
         station_data = current_state[station]
