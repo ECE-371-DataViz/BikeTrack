@@ -18,8 +18,7 @@ COLOR_MAP = {
     "blank": (0, 0, 0),
 }
 N_LEDS = 655
-LEDS = neopixel.NeoPixel(board.D18, N_LEDS, auto_write=False)
-
+LEDS = neopixel.NeoPixel(board.D18, N_LEDS, brightness=0.05, auto_write=False)
 
 def hex_to_rgb(color_hex, default_color=COLOR_MAP["white"]):
     """Convert a hex color string (e.g., '#0077be') to an RGB tuple."""
