@@ -17,6 +17,14 @@ COLOR_MAP = {
     "white": (255, 255, 255),
     "blank": (0, 0, 0),
 }
+
+
+# The LED behavior depends on the driver itself...
+# LEDS = [0] * 700  # placeholder for LED strip
+NUM_BLINKS = 5
+BLINK_DURATION = 1
+UPDATE_RATE = 1  # Seconds between update
+
 N_LEDS = 665
 LEDS = neopixel.NeoPixel(board.D18, N_LEDS, brightness=0.1, auto_write=False)
 
@@ -30,12 +38,6 @@ def hex_to_rgb(color_hex, default_color=COLOR_MAP["white"]):
     except ValueError:
         print("Invalid hex color:", color_hex)
         return default_color
-
-# The LED behavior depends on the driver itself...
-# LEDS = [0] * 700  # placeholder for LED strip
-NUM_BLINKS = 3
-BLINK_DURATION = 0.5
-UPDATE_RATE = 1  # Seconds between update
 
 
 # PostgreSQL manager instance
