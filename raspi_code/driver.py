@@ -18,7 +18,7 @@ COLOR_MAP = {
     "blank": (0, 0, 0),
 }
 N_LEDS = 665
-LEDS = neopixel.NeoPixel(board.D18, N_LEDS, brightness=0.05, auto_write=False)
+LEDS = neopixel.NeoPixel(board.D18, N_LEDS, brightness=0.1, auto_write=False)
 
 def hex_to_rgb(color_hex, default_color=COLOR_MAP["white"]):
     """Convert a hex color string (e.g., '#0077be') to an RGB tuple."""
@@ -61,14 +61,14 @@ def get_color(station):
         return (0, 0, 0)
     
     base = COLOR_MAP["red"]
-    brightness = min(station["docks_available"], 25.5) * 10
-    # Green if more than 10% of bikes are ebikes
-    if station["bikes_available"] > 0 and (station["ebikes_available"] / station["bikes_available"]) > 0.1:
+    brightness = min(station["docks_available"]+30, 25.5) * 10
+    # Green if more than 25% of bikes are ebikes
+    if station["bikes_available"] > 0 and (station["ebikes_available"] / station["bikes_available"]) > 0.25:
         base = COLOR_MAP["green"]
-        brightness = min(station["bikes_available"], 25.5) * 10
+        brightness = min(station["bikes_available"]+30, 25.5) * 10
     elif station["bikes_available"] > 0:
         base = COLOR_MAP["blue"]
-        brightness = min(station["bikes_available"], 25.5) * 10
+        brightness = min(station["bikes_available"] + 30, 25.5) * 10
     return [int(b * brightness / 255) for b in base]
 
 
