@@ -15,9 +15,10 @@ COLOR_MAP = {
     "green": (0, 255, 0),
     "blue": (0, 0, 255),
     "white": (255, 255, 255),
+    "blank": (0, 0, 0),
 }
-
-LEDS = neopixel.NeoPixel(board.D18, 655, auto_write=False)
+N_LEDS = 655
+LEDS = neopixel.NeoPixel(board.D18, N_LEDS, auto_write=False)
 
 
 def hex_to_rgb(color_hex, default_color=COLOR_MAP["white"]):
@@ -28,6 +29,7 @@ def hex_to_rgb(color_hex, default_color=COLOR_MAP["white"]):
     try:
         return tuple(int(stripped[i : i + 2], 16) for i in (0, 2, 4))
     except ValueError:
+        print("Invalid hex color:", color_hex)
         return default_color
 
 # The LED behavior depends on the driver itself...
@@ -50,6 +52,7 @@ def init_live():
         index = station["index"]
         color = get_color(station)
         LEDS[index] = color
+    LEDS.show()
     return base_state
 
 
@@ -57,17 +60,17 @@ def get_color(station):
     # Turn off LED if station has no bikes and no docks (out of service)
     if station["bikes_available"] == 0 and station["docks_available"] == 0:
         return (0, 0, 0)
-    base = COLOR_MAP["red"]
-    brightness = int(max(station["docks_available"], 25.5) * 10)
+    
+    base = COLOR_MAP["red"] / 255
+    brightness = int(min(station["docks_available"], 25.5) * 10)
     # Green if more than 10% of bikes are ebikes
     if station["bikes_available"] > 0 and (station["ebikes_available"] / station["bikes_available"]) > 0.1:
-        base = COLOR_MAP["green"]
-        brightness = int(max(station["bikes_available"], 25.5) * 10)
+        base = COLOR_MAP["green"] / 255
+        brightness = int(min(station["bikes_available"], 25.5) * 10)
     elif station["bikes_available"] > 0:
-        base = COLOR_MAP["blue"]
-        brightness = int(max(station["bikes_available"], 25.5) * 10)
-
-    return (base[0] * brightness, base[1] * brightness, base[2] * brightness)
+        base = COLOR_MAP["blue"] / 255
+        brightness = int(min(station["bikes_available"], 25.5) * 10)
+    return base * brightness
 
 
 def diff(current, new):
@@ -85,9 +88,9 @@ def blink(update_list):
         for position in update_list:
             color = update_list[position][0]
             LEDS[position] = color
+        LEDS.show()
         time.sleep(BLINK_DURATION / 2)
-        for position in update_list:
-            LEDS[position] = (0, 0, 0)
+        clear_all_leds()
         time.sleep(BLINK_DURATION / 2)
 
 
@@ -107,7 +110,7 @@ def live_mode(current_state):
         position = station_data["index"]
         color = get_color(station_data)
         LEDS[position] = color
-
+    LEDS.show()
     return current_state
 
 
@@ -138,12 +141,14 @@ def historic_mode(current_state, timestamp):
         position = station_data["index"]
         color = get_color(station_data)
         LEDS[position] = color
+    LEDS.show()
     return current_state
 
 
 def clear_all_leds():
     """Clear all LEDs to black"""
-    LEDS.fill((0,0,0))
+    LEDS.fill(COLOR_MAP["blank"])
+    LEDS.show()
 
 ## Blinks them, and then leaves them on the last color
 if __name__ == "__main__":
