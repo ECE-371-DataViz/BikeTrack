@@ -552,7 +552,7 @@ class DBManager:
 
 if __name__ == "__main__":
     # GBFS URL
-    # Update interval in seconds
+    #G Update interval in seconds
     manager = DBManager(DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD)
     manager.initial_load()
     last_archive = datetime.now()
@@ -565,8 +565,12 @@ if __name__ == "__main__":
         if archive:
             last_archive = datetime.now()
             print(f"Archiving historic data at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}...")
-        num_updated = manager.update_stations(
-            url=station_status_url, archive=archive
-        )
-        print(f'Updated {num_updated} stations at {datetime.now().strftime("%H:%M:%S")}')
-        time.sleep(UPDATE_INTERVAL)
+        try:
+            num_updated = manager.update_stations(
+                url=station_status_url, archive=archive
+            )
+            print(f'Updated {num_updated} stations at {datetime.now().strftime("%H:%M:%S")}')
+            time.sleep(UPDATE_INTERVAL)
+        except Exception as e:
+            print(f"Error updating stations... Waiting to see if issue resolves: {e}")
+            time.sleep(30)
