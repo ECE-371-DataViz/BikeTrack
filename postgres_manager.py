@@ -340,7 +340,8 @@ class DBManager:
                 .all()
             )
             # Dict preserves insertion order; latitude ascending yields south→north
-            return {route.station_id: {route.station.index, route.color} for route in routes}
+            # Return mapping of station_id -> color (hex string)
+            return {route.station_id: route.color for route in routes}
 
     def clear_route(self):
         """Clear route stations"""

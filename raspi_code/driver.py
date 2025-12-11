@@ -130,8 +130,12 @@ def route_mode():
     for station_id, color_hex in route_map.items():
         station = station_map.get(station_id)
         if not station:
+            print(f"Warning: station_id {station_id} not found in station map")
             continue
-        index = station["index"]
+        index = station.get("index")
+        if index is None or not isinstance(index, int) or index < 0 or index >= N_LEDS:
+            print(f"Warning: invalid index for station {station_id}: {index}")
+            continue
         color = hex_to_rgb(color_hex, COLOR_MAP["white"])
         LEDS[index] = color
         LEDS.show()
