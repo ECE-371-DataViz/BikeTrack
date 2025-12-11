@@ -193,7 +193,7 @@ class DBManager:
             return meta
 
     def update_metadata(
-        self, session=None, type=None, viewing_timestamp=None, speed=None
+        self, session=None, in_type=None, viewing_timestamp=None, speed=None
     ):
         """
         Update the metadata table with mode, last_updated, viewing_timestamp, and speed.
@@ -207,7 +207,12 @@ class DBManager:
             with self.Session_eng() as session:
                 meta = session.get(AppMetadata, 1)
                 meta.last_updated = datetime.now()
-                meta.mode = type if type else meta.mode
+                print("Updating metadata:", {
+                    "mode": in_type,
+                    "viewing_timestamp": viewing_timestamp,
+                    "speed": speed
+                })
+                meta.mode = in_type if in_type else meta.mode
                 if viewing_timestamp is not None:
                     meta.viewing_timestamp = viewing_timestamp
                 if speed is not None:
@@ -217,7 +222,7 @@ class DBManager:
                 return meta
         meta = session.get(AppMetadata, 1)
         meta.last_updated = datetime.now()
-        meta.mode = type if type else meta.mode
+        meta.mode = in_type if in_type else meta.mode
         if viewing_timestamp is not None:
             meta.viewing_timestamp = viewing_timestamp
         if speed is not None:
