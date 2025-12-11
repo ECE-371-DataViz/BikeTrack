@@ -50,6 +50,7 @@ def init_live():
         base_state[station_id] = station
         index = station["index"]
         color = get_color(station)
+        print(index)
         LEDS[index] = color
     LEDS.show()
     return base_state
