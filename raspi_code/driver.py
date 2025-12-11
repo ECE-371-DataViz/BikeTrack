@@ -125,7 +125,7 @@ def route_mode():
     route_map = db_manager.get_route_stations()
     if not route_map:
         print("Route mode: route map is empty, switching to LIVE mode")
-        db_manager.update_metadata(type=LIVE)
+        db_manager.update_metadata(in_type=LIVE)
         return
     # Build a station lookup table by station_id for quick access
     all_stations = db_manager.get_all_stations()

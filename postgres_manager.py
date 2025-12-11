@@ -329,7 +329,7 @@ class DBManager:
                     color=station_data.get("color", "#ffffff"),
                 )
                 session.add(route)
-            self.update_metadata(session, type=ROUTE)
+            self.update_metadata(session, in_type=ROUTE)
             session.commit()
         print(f"✓ Stored {len(route_stations)} route stations in PostgreSQL")
 
@@ -352,7 +352,7 @@ class DBManager:
         """Clear route stations"""
         with self.Session_eng() as session:
             session.query(Route).delete()
-            self.update_metadata(session, type=LIVE)
+            self.update_metadata(session, in_type=LIVE)
             session.commit()
 
         print("✓ Cleared route stations")
@@ -530,7 +530,7 @@ class DBManager:
                     )
                     session.add(route)
 
-                self.update_metadata(session, type=ROUTE)
+                self.update_metadata(session, in_type=ROUTE)
                 session.commit()
                 print(f"✓ Wrote {len(stations_to_write)} route stations to PostgreSQL")
                 return len(stations_to_write)

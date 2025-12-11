@@ -189,7 +189,7 @@ def clear_route():
     db_manager = get_db_manager()
     db_manager.clear_route()
     # Set metadata mode back to LIVE
-    db_manager.update_metadata(type=LIVE)
+    db_manager.update_metadata(in_type=LIVE)
     st.success("✓ Route cleared - LEDs will return to normal status mode")
 
 
@@ -529,7 +529,7 @@ def main():
                 )
                 # Update metadata table for historic view
                 db_manager.update_metadata(
-                    type=HISTORIC, viewing_timestamp=selected_datetime, speed=speed
+                    in_type=HISTORIC, viewing_timestamp=selected_datetime, speed=speed
                 )
         else:
             st.sidebar.error("Could not connect to database")
