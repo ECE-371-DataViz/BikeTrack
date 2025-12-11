@@ -188,6 +188,8 @@ def clear_route():
     # Clear route data from PostgreSQL
     db_manager = get_db_manager()
     db_manager.clear_route()
+    # Set metadata mode back to LIVE
+    db_manager.update_metadata(type=LIVE)
     st.success("✓ Route cleared - LEDs will return to normal status mode")
 
 
