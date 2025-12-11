@@ -123,8 +123,12 @@ def live_mode(current_state):
 def route_mode():
     # get_route_stations() returns a dict mapping station_id -> color_hex
     route_map = db_manager.get_route_stations()
+    if not route_map:
+        print("Route mode: route map is empty")
+        return
     # Build a station lookup table by station_id for quick access
     all_stations = db_manager.get_all_stations()
+    
     station_map = {s["station_id"]: s for s in all_stations}
     clear_all_leds()
     for station_id, color_hex in route_map.items():
@@ -136,11 +140,14 @@ def route_mode():
         if index is None or not isinstance(index, int) or index < 0 or index >= N_LEDS:
             print(f"Warning: invalid index for station {station_id}: {index}")
             continue
+
         color = hex_to_rgb(color_hex, COLOR_MAP["white"])
         LEDS[index] = color
         LEDS.show()
         # Slowly light up each LED from bottom to top
         time.sleep(0.1)
+    # Ensure final state is visible
+    LEDS.show()
 
 def historic_mode(current_state, timestamp):
     stations = db_manager.get_closest_artifact(timestamp)
@@ -164,7 +171,7 @@ def historic_mode(current_state, timestamp):
 
 def clear_all_leds():
     """Clear all LEDs to black"""
-    print("Clearing all LEDs...")
+    # print("Clearing all LEDs...")
     LEDS.fill(COLOR_MAP["blank"])
     LEDS.show()
 

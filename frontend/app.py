@@ -589,6 +589,8 @@ def main():
                         })
                 # Write to database only if not already written
                 if all_route_stations and not st.session_state.get("route_written", False):
+                    # Clear previous route before writing new one
+                    db_manager.clear_route()
                     db_manager.set_route_stations(all_route_stations)
                     st.session_state["route_written"] = True
                 # Render the routes on map
