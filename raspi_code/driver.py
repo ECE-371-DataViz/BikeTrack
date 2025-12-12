@@ -190,7 +190,7 @@ if __name__ == "__main__":
     historic_start_index = None
     
     while True:
-        try:
+        # try:
             s_time = time.time()
             db_state = db_manager.get_metadata()
             if db_state.mode != mode:
@@ -232,7 +232,7 @@ if __name__ == "__main__":
                     route_mode()
                 time_dormant = max(0, UPDATE_RATE - (time.time() - s_time))
                 time.sleep(time_dormant)
-        except Exception as e:
-            print("Error in main loop: Changing system behavior to live mode", e)
-            db_manager.update_metadata(in_type=LIVE)
-            time.sleep(5)
+        # except Exception as e:
+        #     print("Error in main loop: Changing system behavior to live mode", e)
+        #     db_manager.update_metadata(in_type=LIVE)
+        #     time.sleep(5)
