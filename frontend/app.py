@@ -78,34 +78,39 @@ def find_route_stations(origin_coords, dest_coords, bike_type, station_threshold
         return None, None, None, None, None, None
     
     # Process all routes - accumulate stations in combined dict
+    # Route color palette (matches map): violet, pink, orange
+    route_colors = ["#8A2BE2", "#FF69B4", "#FFA500"]
     route_dict = {}
     paths = []
     stations_per_route = []
     features = []
-    
-    for feature in directions["features"]:
+
+    for idx, feature in enumerate(directions["features"]):
         # Extract path coordinates
         coords = feature["geometry"]["coordinates"]
         path = [[lat, lon] for lon, lat in coords]
         paths.append([path])  # Wrapped in list for backward compatibility
-        
+
         # Get stations along this specific path (1 DB call per route)
         path_stations = db_manager.get_stations_on_path(path, station_threshold)
         stations_per_route.append(path_stations)
-        
-        # Add to combined dict (white) - lowest priority
+
+        # Determine color for this route
+        route_color = route_colors[idx % len(route_colors)]
+
+        # Add to combined dict using route color. Preserve first-seen color for stations
         for stn in path_stations:
-            route_dict[str(stn["station_id"])] = "#FFFFFF"
-        
+            sid = str(stn["station_id"])
+            if sid not in route_dict:
+                route_dict[sid] = route_color
+
         features.append(feature)
-    
-    # Add start station color - medium priority (overrides white)
-    start_color = "#00FF00" if bike_type == "ebike" else "#0000FF"
-    route_dict[str(start_station["station_id"])] = start_color
-    
-    # Add end station (red) - highest priority (overrides everything)
-    route_dict[str(end_station["station_id"])] = "#FF0000"
-    
+
+    # Use primary route color for start/end so LEDs match the displayed primary route
+    primary_color = route_colors[0]
+    route_dict.setdefault(str(start_station["station_id"]), primary_color)
+    route_dict.setdefault(str(end_station["station_id"]), primary_color)
+
     return route_dict, paths, stations_per_route, start_station, end_station, features
 
 
@@ -195,21 +200,25 @@ def render_routes(map, paths, start, end, stations, selected_route=None, route_t
     path_idxs = range(len(paths))
     if selected_route:
         path_idxs = [selected_route - 1]
-    for i in path_idxs:
-        for segment in paths[i]:
+    # Route color palette: violet, pink, orange
+    route_colors = ["#8A2BE2", "#FF69B4", "#FFA500"]
+    for idx in path_idxs:
+        route_color = route_colors[idx % len(route_colors)]
+        for segment in paths[idx]:
             folium.PolyLine(
                 segment,
-                color="#3388ff",
+                color=route_color,
                 weight=5,
-                opacity=0.8,
+                opacity=0.85,
             ).add_to(map)
-        for station in stations[i]:
+        # Draw stations for this route using the same route color
+        for station in stations[idx]:
             folium.CircleMarker(
                 location=[station["latitude"], station["longitude"]],
                 radius=5,
-                color="white",
+                color=route_color,
                 fill=True,
-                fill_color="white",
+                fill_color=route_color,
                 fill_opacity=0.9,
                 opacity=0.9,
                 weight=1,
