@@ -180,10 +180,12 @@ if __name__ == "__main__":
     mode_matcher = {LIVE: live_mode, ROUTE: route_mode, HISTORIC: historic_mode}
     db_state = db_manager.get_metadata()
     mode = db_state.mode
+
+    speed = None
     station_states = db_manager.get_all_station_status()
 
     # Historic playback state
-    starting_timestamp = datetime.now()
+    starting_timestamp = None
     historic_timestamps = []
     viewing_idx = None
     historic_start_index = None
@@ -205,25 +207,28 @@ if __name__ == "__main__":
                 # When the viewing timestamp changes,
                 # load the full list of available historic timestamps and find the
                 # starting index to begin playback from.
-                if db_state.viewing_timestamp != starting_timestamp:
+                if db_state.viewing_timestamp != starting_timestamp or speed != db_state.speed:
+                    speed = db_state.speed
                     starting_timestamp = db_state.viewing_timestamp
                     historic_timestamps = db_manager.get_timestamps()
                     viewing_idx = historic_timestamps.index(starting_timestamp)
                     if not historic_timestamps:
                         print("No historic timestamps available, switching to live")
                         db_manager.update_metadata(in_type=LIVE)
+                        starting_timestamp = None
                         continue
                 else:
                     viewing_idx += 1
                     if viewing_idx >= len(historic_timestamps):
                         print("Reached end of historic timestamps, switching to live")
                         db_manager.update_metadata(in_type=LIVE)
+                        starting_timestamp = None
                         continue
 
                 timestamp = historic_timestamps[viewing_idx]
                 print("Viewing historic timestamp:", timestamp)
                 historic_mode(station_states, timestamp)
-                time.sleep(db_state.speed)
+                time.sleep(speed)
             else:
                 if mode == LIVE:
                     station_states = live_mode(station_states)
