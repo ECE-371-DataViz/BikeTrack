@@ -513,6 +513,7 @@ def main():
             10,
             200,
             50,
+            on_change=reset_run_keep_points,
             key="station_threshold_slider",
         )
 
