@@ -11,9 +11,9 @@ DB_USER = 'biketracker'
 DB_PASSWORD='biketrack_password'  # Change this to a secure password in production
 
 # Metadata types
-LIVE=0
-ROUTE=1
-HISTORIC=2
+LIVE=1
+ROUTE=2
+HISTORIC=3
 
 # Update interval in seconds
 UPDATE_INTERVAL = 30
