@@ -360,18 +360,17 @@ class DBManager:
     def get_closest_artifact(self, timestamp):
         """Get all station snapshots for the timestamp closest to the given timestamp"""
         with self.Session_eng() as session:
-            # Get all distinct timestamps from the database
-            all_timestamps = session.query(HistoricData.timestamp).distinct().all()            
+            # Get all distinct timestamps as plain datetime objects
+            all_timestamps = (
+                session.query(HistoricData.timestamp).distinct().scalars().all()
+            )
             if not all_timestamps:
                 return []
-            
+
             # Find the closest timestamp using Python
-            closest_timestamp = min(
-                all_timestamps, 
-                key=lambda ts: abs((ts - timestamp).total_seconds())
-            )
-            
-            print((f"Closest timestamp found: {closest_timestamp}"))
+            closest_timestamp = min(all_timestamps, key=lambda ts: abs((ts - timestamp).total_seconds()))
+
+            print(f"Closest timestamp found: {closest_timestamp}")
             # Fetch all historic snapshots for that timestamp
             snapshots = (
                 session.query(HistoricData)
@@ -380,6 +379,8 @@ class DBManager:
             )
 
             return [x.to_dict() for x in snapshots]
+
+
 
     def get_timestamp_range(self):
         """Get the min and max timestamps from historic_data"""

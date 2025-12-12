@@ -555,7 +555,7 @@ def main():
             "\n\n⚫ Grey = Out of service"
         )
         db_manager = get_db_manager()
-        db_manager.update_metadata(type=LIVE)
+        db_manager.update_metadata(in_type=LIVE)
         if st.sidebar.button(
             "🔄 Refresh Data", use_container_width=True, type="primary"
         ):
