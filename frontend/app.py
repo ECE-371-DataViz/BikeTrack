@@ -106,10 +106,12 @@ def find_route_stations(origin_coords, dest_coords, bike_type, station_threshold
 
         features.append(feature)
 
-    # Use primary route color for start/end so LEDs match the displayed primary route
-    primary_color = route_colors[0]
-    route_dict.setdefault(str(start_station["station_id"]), primary_color)
-    route_dict.setdefault(str(end_station["station_id"]), primary_color)
+    # Start/end keep their previous semantics: start is green (ebike) or blue, end is red
+    start_color = "#00FF00" if bike_type == "ebike" else "#0000FF"
+    end_color = "#FF0000"
+    # Ensure start/end override any path color
+    route_dict[str(start_station["station_id"])] = start_color
+    route_dict[str(end_station["station_id"])] = end_color
 
     return route_dict, paths, stations_per_route, start_station, end_station, features
 
