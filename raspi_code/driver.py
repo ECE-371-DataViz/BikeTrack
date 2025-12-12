@@ -192,26 +192,31 @@ if __name__ == "__main__":
     starting_timestamp = datetime.now()
     ticks = 0
     while True:
-        s_time = time.time()
-        db_state = db_manager.get_metadata()
-        if db_state.mode != mode:
-            print("Mode changed from", mode, "to", db_state.mode)
-            mode = db_state.mode
-            clear_all_leds()
-        if mode == HISTORIC:
-            print("In Historic Mode")
-            if db_state.viewing_timestamp != starting_timestamp:
-                starting_timestamp = db_state.viewing_timestamp
-                ticks = 0
+        try:
+            s_time = time.time()
+            db_state = db_manager.get_metadata()
+            if db_state.mode != mode:
+                print("Mode changed from", mode, "to", db_state.mode)
+                mode = db_state.mode
+                clear_all_leds()
+            if mode == HISTORIC:
+                print("In Historic Mode")
+                if db_state.viewing_timestamp != starting_timestamp:
+                    starting_timestamp = db_state.viewing_timestamp
+                    ticks = 0
 
-            timestamp = starting_timestamp + timedelta(minutes=ticks * HISTORY_PERIOD)
-            historic_mode(station_states, timestamp)
-            ticks += 1
-            time.sleep(db_state.speed)
-        else:
-            if mode == LIVE:
-                station_states = live_mode(station_states)
-            elif mode == ROUTE:
-                route_mode()
-            time_dormant = max(0, UPDATE_RATE - (time.time() - s_time))
-            time.sleep(time_dormant)
+                timestamp = starting_timestamp + timedelta(minutes=ticks * HISTORY_PERIOD)
+                historic_mode(station_states, timestamp)
+                ticks += 1
+                time.sleep(db_state.speed)
+            else:
+                if mode == LIVE:
+                    station_states = live_mode(station_states)
+                elif mode == ROUTE:
+                    route_mode()
+                time_dormant = max(0, UPDATE_RATE - (time.time() - s_time))
+                time.sleep(time_dormant)
+        except Exception as e:
+            print("Error in main loop: Changing system behavior to live mode", e)
+            db_manager.update_metadata(in_type=LIVE)
+            time.sleep(5)
