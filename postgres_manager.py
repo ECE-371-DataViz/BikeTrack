@@ -357,40 +357,32 @@ class DBManager:
 
         print("✓ Cleared route stations")
 
-    def get_closest_artifact(self, timestamp):
-        """Get all station snapshots for the timestamp closest to the given timestamp"""
+    # Deprecated: get_closest_artifact removed — use get_timestamps() + get_artifact(timestamp)
+
+    def get_timestamps(self):
+        """Return all distinct historic timestamps ordered ascending as datetime objects."""
         with self.Session_eng() as session:
-            # Get all distinct timestamps as plain datetime objects
-            all_timestamps = (
-                session.query(HistoricData.timestamp).distinct().scalars().all()
-            )
-            if not all_timestamps:
-                return []
+            # Try to get scalar datetime objects when supported
+                stmt = select(HistoricData.timestamp).distinct().order_by(HistoricData.timestamp.asc())
+                data = session.execute(stmt)
+                return data.scalars().all()
 
-            # Find the closest timestamp using Python
-            closest_timestamp = min(all_timestamps, key=lambda ts: abs((ts - timestamp).total_seconds()))
+    def get_artifact(self, timestamp):
+        """Fetch all historic snapshots for the exact given timestamp.
 
-            print(f"Closest timestamp found: {closest_timestamp}")
-            # Fetch all historic snapshots for that timestamp
+        Returns a list of dicts for each station snapshot at that timestamp.
+        """
+        with self.Session_eng() as session:
             snapshots = (
                 session.query(HistoricData)
-                .filter(HistoricData.timestamp == closest_timestamp)
+                .filter(HistoricData.timestamp == timestamp)
                 .all()
             )
-
             return [x.to_dict() for x in snapshots]
 
 
 
-    def get_timestamp_range(self):
-        """Get the min and max timestamps from historic_data"""
-        with self.Session_eng() as session:
-            result = session.query(
-                func.min(HistoricData.timestamp), func.max(HistoricData.timestamp)
-            ).first()
-            if result and len(result) == 2:
-                return {"min": result[0], "max": result[1]}
-            return None
+    # Deprecated: get_timestamp_range removed — use get_timestamps() for available timestamps
 
 
     def get_stations_by_distance(

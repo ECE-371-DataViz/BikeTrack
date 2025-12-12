@@ -567,27 +567,25 @@ def main():
         st.sidebar.subheader("Historic Station View")
         db_manager = get_db_manager()
         if db_manager:
-            timestamp_range = db_manager.get_timestamp_range()
-            if timestamp_range:
-                min_time = timestamp_range["min"]
-                max_time = timestamp_range["max"]
-                if not min_time or not max_time:
-                    st.error("No historic data available")
-                    st.stop()
-                st.sidebar.write(f"📅 Data Range:")
-                st.sidebar.write(
-                    f"From: {min_time.strftime('%Y-%m-%d %H:%M')}")
-                st.sidebar.write(f"To: {max_time.strftime('%Y-%m-%d %H:%M')}")
-                if "historic_timestamp" not in st.session_state:
-                    st.session_state["historic_timestamp"] = min_time
-                selected_datetime = st.sidebar.slider(
-                    "Select Time:",
-                    min_value=min_time,
-                    max_value=max_time,
-                    value=st.session_state.get("historic_timestamp", min_time),
-                    format="MM/DD/YY HH:mm",
-                    key="historic_time_slider",
-                )
+            # Use explicit timestamp list for precise historic selection
+            timestamps = db_manager.get_timestamps()
+            if not timestamps:
+                st.error("No historic data available")
+                st.stop()
+            min_time = timestamps[0]
+            max_time = timestamps[-1]
+            st.sidebar.write("📅 Data Range:")
+            st.sidebar.write(f"From: {min_time.strftime('%Y-%m-%d %H:%M')}")
+            st.sidebar.write(f"To: {max_time.strftime('%Y-%m-%d %H:%M')}")
+            if "historic_timestamp" not in st.session_state:
+                st.session_state["historic_timestamp"] = min_time
+            # Allow selecting an exact available timestamp (discrete options)
+            selected_datetime = st.sidebar.select_slider(
+                "Select Time:",
+                options=timestamps,
+                value=st.session_state.get("historic_timestamp", min_time),
+                key="historic_time_slider",
+            )
                 speed = st.sidebar.slider(
                     "Playback Speed (Seconds/Step)",
                     1,
@@ -668,7 +666,7 @@ def main():
         station_list = db_manager.get_all_stations()
         if station_list and "historic_timestamp" in st.session_state:
             selected_timestamp = st.session_state["historic_timestamp"]
-            historic_data = db_manager.get_closest_artifact(selected_timestamp)
+            historic_data = db_manager.get_artifact(selected_timestamp)
             if historic_data:
                 stations_added = add_historic_view_stations(m, station_list, historic_data)
                 st.success(f"Displaying {stations_added} stations at {selected_timestamp.strftime('%Y-%m-%d %H:%M')}")

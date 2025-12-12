@@ -150,8 +150,12 @@ def route_mode():
     # Ensure final state is visible
     LEDS.show()
 
-def historic_mode(current_state, timestamp):
-    stations = db_manager.get_closest_artifact(timestamp)
+def historic_mode(current_state, starting_timestamp):
+    stations = db_manager.get_artifact(starting_timestamp)
+    if len(stations) == 0:
+        print("No historic data for timestamp, moving to live", starting_timestamp)
+        db_manager.update_metadata(in_type=LIVE)
+        return current_state
     update_list = {}
     for station in stations:
         station_id = station["station_id"]
@@ -185,7 +189,8 @@ if __name__ == "__main__":
     state = db_manager.get_metadata()
     mode = state.mode
     current_state = db_manager.get_all_station_status()
-    timestamp = datetime.now()
+    starting_timestamp = datetime.now()
+    ticks = 0
     while True:
         s_time = time.time()
         state = db_manager.get_metadata()
@@ -195,11 +200,14 @@ if __name__ == "__main__":
             clear_all_leds()
         if mode == HISTORIC:
             print("In Historic Mode")
-            if state.viewing_timestamp != timestamp:
-                timestamp = state.viewing_timestamp
-                historic_mode(state, timestamp)
-                timestamp += timedelta(minutes=HISTORY_PERIOD)
-                time.sleep(state.speed)
+            if state.viewing_timestamp != starting_timestamp:
+                starting_timestamp = state.viewing_timestamp
+                ticks = 0
+
+            timestamp = starting_timestamp + timedelta(minutes=ticks * HISTORY_PERIOD)
+            historic_mode(state, timestamp)
+            ticks += 1
+            time.sleep(state.speed)
         else:
             if mode == LIVE:
                 current_state = live_mode(current_state)
