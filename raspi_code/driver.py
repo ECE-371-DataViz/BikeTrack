@@ -186,31 +186,31 @@ if __name__ == "__main__":
     init_live()
     clear_all_leds()
     mode_matcher = {LIVE: live_mode, ROUTE: route_mode, HISTORIC: historic_mode}
-    state = db_manager.get_metadata()
-    mode = state.mode
-    current_state = db_manager.get_all_station_status()
+    db_state = db_manager.get_metadata()
+    mode = db_state.mode
+    station_states = db_manager.get_all_station_status()
     starting_timestamp = datetime.now()
     ticks = 0
     while True:
         s_time = time.time()
-        state = db_manager.get_metadata()
-        if state.mode != mode:
-            print("Mode changed from", mode, "to", state.mode)
-            mode = state.mode
+        db_state = db_manager.get_metadata()
+        if db_state.mode != mode:
+            print("Mode changed from", mode, "to", db_state.mode)
+            mode = db_state.mode
             clear_all_leds()
         if mode == HISTORIC:
             print("In Historic Mode")
-            if state.viewing_timestamp != starting_timestamp:
-                starting_timestamp = state.viewing_timestamp
+            if db_state.viewing_timestamp != starting_timestamp:
+                starting_timestamp = db_state.viewing_timestamp
                 ticks = 0
 
             timestamp = starting_timestamp + timedelta(minutes=ticks * HISTORY_PERIOD)
-            historic_mode(state, timestamp)
+            historic_mode(station_states, timestamp)
             ticks += 1
-            time.sleep(state.speed)
+            time.sleep(db_state.speed)
         else:
             if mode == LIVE:
-                current_state = live_mode(current_state)
+                station_states = live_mode(station_states)
             elif mode == ROUTE:
                 route_mode()
             time_dormant = max(0, UPDATE_RATE - (time.time() - s_time))
