@@ -203,10 +203,6 @@ if __name__ == "__main__":
                 historic_start_index = None
                 ticks = 0
             if mode == HISTORIC:
-                print("In Historic Mode")
-                # When the viewing timestamp changes,
-                # load the full list of available historic timestamps and find the
-                # starting index to begin playback from.
                 if db_state.viewing_timestamp != starting_timestamp or speed != db_state.speed:
                     speed = db_state.speed
                     starting_timestamp = db_state.viewing_timestamp
