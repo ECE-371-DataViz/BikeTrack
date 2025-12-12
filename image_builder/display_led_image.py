@@ -25,6 +25,27 @@ except (ImportError, NotImplementedError):
     print("Warning: Running in simulation mode (not on Raspberry Pi)")
 
 
+def load_logo(csv_path, led_array):
+    """
+    Load LED color values from a CSV and set them in the provided LED array.
+    Does not loop or call show().
+    Args:
+        csv_path: Path to the CSV file (index,r,g,b columns required)
+        led_array: NeoPixel or similar array, modified in-place
+    """
+    import csv
+    with open(csv_path, 'r') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            idx = int(row['index'])
+            r = int(row['r'])
+            g = int(row['g'])
+            b = int(row['b'])
+            if 0 <= idx < len(led_array):
+                led_array[idx] = (r, g, b)
+
+
+
 def load_led_colors(csv_path):
     """Load LED colors from CSV file
     
@@ -41,6 +62,7 @@ def load_led_colors(csv_path):
             b = int(row['b'])
             colors.append((index, r, g, b))
     return colors
+    
 
 
 def display_on_leds(colors, duration=None, brightness=0.1):
