@@ -480,21 +480,21 @@ def main():
     if app_mode == "Route Finder":
         st.sidebar.subheader("Route Settings")
         st.session_state["app_mode"] = "Route Finder"
-        touch = st.sidebar.checkbox(
-            "Click map to set points", on_change=reset_run)
+        # touch = st.sidebar.checkbox(
+        #     "Click map to set points", on_change=reset_run)
 
-        if not touch:
-            origin = st.sidebar.text_input(
-                "Origin", "East Village, New York, NY", on_change=reset_run
-            )
-            destination = st.sidebar.text_input(
-                "Destination", "Times Square, New York, NY", on_change=reset_run
-            )
-            o_c = geocode(origin)
-            d_c = geocode(destination)
-        else:
-            o_c = st.session_state["click_origin"]
-            d_c = st.session_state["click_destination"]
+        # if not touch:
+        origin = st.sidebar.text_input(
+            "Origin", "East Village, New York, NY", on_change=reset_run
+        )
+        destination = st.sidebar.text_input(
+            "Destination", "Times Square, New York, NY", on_change=reset_run
+        )
+        o_c = geocode(origin)
+        d_c = geocode(destination)
+        # else:
+        #     o_c = st.session_state["click_origin"]
+        #     d_c = st.session_state["click_destination"]
         num_routes = st.sidebar.slider(
             "Number of Routes",
             1,
