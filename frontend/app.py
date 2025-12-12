@@ -1,12 +1,10 @@
 import streamlit as st
 import numpy as np
-import pandas as pd
 import folium
 from streamlit_folium import st_folium
 from geopy.geocoders import Nominatim
 import googlemaps
 import polyline
-import os
 from postgres_manager import DBManager
 from globals import *
 from api_keys import *
@@ -42,6 +40,73 @@ def get_gmaps_client():
 def get_station_status():
     db_manager = get_db_manager()
     return db_manager.get_all_station_status()
+
+
+def find_route_stations(origin_coords, dest_coords, bike_type, station_threshold, num_routes=1):
+    """
+    Optimized multi-route station finder.
+    Returns combined route_dict for all routes plus per-route data for rendering.
+    
+    Returns:
+        route_dict: Combined {station_id: color} for all routes (for DB write)
+        paths: List of paths for each route
+        stations_per_route: List of station lists for each route
+        start_station: Start station dict
+        end_station: End station dict
+        features: List of Google Maps feature objects for each route
+    """
+    db_manager = get_db_manager()
+    
+    # Find start and end stations (2 DB calls total, shared across all routes)
+    start_station = db_manager.get_stations_by_distance(
+        origin_coords[0], origin_coords[1], limit=1, 
+        filter_type=bike_type if bike_type != "all" else "bikes"
+    )
+    end_station = db_manager.get_stations_by_distance(
+        dest_coords[0], dest_coords[1], limit=1, filter_type="docks"
+    )
+    
+    if not start_station or not end_station:
+        return None, None, None, None, None, None
+    
+    start_station = start_station[0]
+    end_station = end_station[0]
+    
+    # Get Google Maps directions for multiple routes
+    directions = get_directions(origin_coords, dest_coords, num_routes)
+    if not directions or not directions["features"]:
+        return None, None, None, None, None, None
+    
+    # Process all routes - accumulate stations in combined dict
+    route_dict = {}
+    paths = []
+    stations_per_route = []
+    features = []
+    
+    for feature in directions["features"]:
+        # Extract path coordinates
+        coords = feature["geometry"]["coordinates"]
+        path = [[lat, lon] for lon, lat in coords]
+        paths.append([path])  # Wrapped in list for backward compatibility
+        
+        # Get stations along this specific path (1 DB call per route)
+        path_stations = db_manager.get_stations_on_path(path, station_threshold)
+        stations_per_route.append(path_stations)
+        
+        # Add to combined dict (white) - lowest priority
+        for stn in path_stations:
+            route_dict[str(stn["station_id"])] = "#FFFFFF"
+        
+        features.append(feature)
+    
+    # Add start station color - medium priority (overrides white)
+    start_color = "#00FF00" if bike_type == "ebike" else "#0000FF"
+    route_dict[str(start_station["station_id"])] = start_color
+    
+    # Add end station (red) - highest priority (overrides everything)
+    route_dict[str(end_station["station_id"])] = "#FF0000"
+    
+    return route_dict, paths, stations_per_route, start_station, end_station, features
 
 
 def closest_avail_station(coords, type="bikes"):
@@ -150,11 +215,6 @@ def render_routes(map, paths, start, end, stations, selected_route=None, route_t
                 weight=1,
                 popup=f"Station: {station.get('station_name', station.get('name', station.get('station_id', '')))}",
             ).add_to(map)
-
-def write_route_stations_to_db(start, end, station_list, selected_route=None):
-    db_manager = get_db_manager()
-    pass
-    
 
 def add_all_stations_to_map(m, station_list):
     if not station_list:
@@ -547,70 +607,40 @@ def main():
     # Render map based on selected mode
     if app_mode == "Route Finder":
         if st.session_state["run"] and o_c and d_c:
-            # Get directions and render routes
-            directions = get_directions(o_c, d_c, num_routes)
-            if directions:
-                paths = []
-                stations = []
-                route_stations_list = []
+            # Optimized call to find routes and stations (2 + num_routes DB calls)
+            result = find_route_stations(o_c, d_c, bike_type_value, station_threshold, num_routes)
+            
+            if result[0] is not None:
+                route_dict, paths, stations_per_route, start_station, end_station, features = result
                 
-                for feature in directions["features"]:
-                    coords = feature["geometry"]["coordinates"]
-                    path = [[lat, lon] for lon, lat in coords]
-                    paths.append([path])
-                    
-                    # Get stations along this route
-                    route_stations = get_points_on_path(path, station_threshold)
-                    stations.append(route_stations)
-                    route_stations_list.append(route_stations)
-                
-                # Find closest start and end stations
-                start_station = closest_avail_station(o_c, type=bike_type_value if bike_type_value != "all" else "bikes")
-
-                end_station = closest_avail_station(d_c, type="docks")
-                
-                # Write route stations to database with colors
-                all_route_stations = []
-                
-                start_color = "#00FF00" if bike_type_value == "ebike" else "#0000FF"  # Green for ebike, Blue for regular
-                all_route_stations.append({
-                    "station_id": str(start_station["station_id"]),
-                    "color": start_color
-                })                
-                all_route_stations.append({
-                    "station_id": str(end_station["station_id"]),
-                    "color": "#FF0000"
-                })
-                # Add route stations (white)
-                for idx, route_stn_list in enumerate(route_stations_list):
-                    color = "#FFFFFF"
-                    for station in route_stn_list:
-                        all_route_stations.append({
-                            "station_id": str(station["station_id"]),
-                            "color": color
-                        })
                 # Write to database only if not already written
-                if all_route_stations and not st.session_state.get("route_written", False):
-                    # Clear previous route before writing new one
+                if route_dict and not st.session_state.get("route_written", False):
+                    # Convert dict to list and write atomically
+                    route_list = [
+                        {"station_id": sid, "color": color}
+                        for sid, color in route_dict.items()
+                    ]
                     db_manager.clear_route()
-                    db_manager.set_route_stations(all_route_stations)
+                    db_manager.set_route_stations(route_list)
                     st.session_state["route_written"] = True
-                # Render the routes on map
+                
+                # Render routes on map
                 render_routes(
-                    m, paths, o_c, d_c, stations, 
-                    st.session_state.get("selected_route"), 
-                    bike_type_value,
-                    start_station=start_station,
-                    end_station=end_station,
+                    m, paths, o_c, d_c, stations_per_route,
+                    st.session_state.get("selected_route"), bike_type_value, 
+                    start_station, end_station
                 )
+                
                 # Show route info
                 st.subheader("Route Information")
-                for i, feature in enumerate(directions["features"], 1):
+                for i, feature in enumerate(features, 1):
                     with st.expander(f"Route {i}", expanded=(i == 1)):
                         distance_km = feature["properties"]["distance"] / 1000
                         duration_min = feature["properties"]["duration"] / 60
                         st.write(f"Distance: {distance_km:.2f} km")
                         st.write(f"Duration: {duration_min:.0f} minutes")
+            else:
+                st.error("Could not find a valid route. Please try different locations.")
     elif app_mode == "General View":
         # General View mode - show all stations with live data
         station_list = db_manager.get_all_stations()
