@@ -143,6 +143,7 @@ class HistoricData(Base):
         """Convert to dictionary"""
         return {
             "station_id": self.station_id,
+            "index": self.station.index,
             "timestamp": self.timestamp,
             "bikes_available": self.bikes_available,
             "docks_available": self.docks_available,
@@ -379,9 +380,6 @@ class DBManager:
                 .all()
             )
             return [x.to_dict() for x in snapshots]
-
-
-
     # Deprecated: get_timestamp_range removed — use get_timestamps() for available timestamps
 
 
