@@ -156,16 +156,7 @@ def historic_mode(current_state, starting_timestamp):
         print("No historic data for timestamp, moving to live", starting_timestamp)
         db_manager.update_metadata(in_type=LIVE)
         return current_state
-    update_list = {}
     for station in stations:
-        station_id = station["station_id"]
-        blink_color = diff(current_state[station_id], station)
-        if blink_color:
-            position = station["index"]
-            update_list[position] = blink_color
-        current_state[station_id] = station
-    blink(update_list)
-    for station in current_state:
         station_data = current_state[station]
         position = station_data["index"]
         color = get_color(station_data)
