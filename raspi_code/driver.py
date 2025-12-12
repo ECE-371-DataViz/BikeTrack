@@ -53,7 +53,6 @@ def init_live():
         index = station["index"] 
         color = get_color(station)
         LEDS[index] = color
-    LEDS.show()
     return base_state
 
 
@@ -71,7 +70,7 @@ def get_color(station):
     elif station["bikes_available"] > 0:
         base = COLOR_MAP["blue"]
         brightness = station["bikes_available"] / (station["bikes_available"] + station["docks_available"])
-    brightness = min(brightness+0.3, 1.0)
+    brightness = min(brightness+0.1, 1.0)
     return [int(b * brightness) for b in base]
 
 
@@ -175,9 +174,17 @@ def clear_all_leds():
 
 ## Blinks them, and then leaves them on the last color
 if __name__ == "__main__":
+    clear_all_leds()
+    load_logo()
+    LEDS.show()
+    start = datetime.now()
     print("Loading stations from PostgreSQL...")
     init_live()
-    clear_all_leds()
+    print("✓ Stations loaded!")
+    delta = datetime.now() - start
+    ## Keep logo up for 10 seconds
+    time.sleep(10 - delta.total_seconds() if delta.total_seconds() < 10 else 0)
+    LEDS.show()
     mode_matcher = {LIVE: live_mode, ROUTE: route_mode, HISTORIC: historic_mode}
     db_state = db_manager.get_metadata()
     mode = db_state.mode
