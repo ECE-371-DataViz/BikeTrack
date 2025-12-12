@@ -8,7 +8,6 @@ from datetime import datetime, timedelta
 import time
 from postgres_manager import DBManager
 from globals import *
-
 # Constants
 COLOR_MAP = {
     "red": (255, 0, 0),
@@ -27,6 +26,25 @@ UPDATE_RATE = 1  # Seconds between update
 
 N_LEDS = 665
 LEDS = neopixel.NeoPixel(board.D18, N_LEDS, brightness=0.1, auto_write=False)
+
+def load_logo(csv_path, led_array):
+    """
+    Load LED color values from a CSV and set them in the provided LED array.
+    Does not loop or call show().
+    Args:
+        csv_path: Path to the CSV file (index,r,g,b columns required)
+        led_array: NeoPixel or similar array, modified in-place
+    """
+    import csv
+    with open(csv_path, 'r') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            idx = int(row['index'])
+            r = int(row['r'])
+            g = int(row['g'])
+            b = int(row['b'])
+            if 0 <= idx < len(led_array):
+                led_array[idx] = (r, g, b)
 
 def hex_to_rgb(color_hex, default_color=COLOR_MAP["white"]):
     """Convert a hex color string (e.g., '#0077be') to an RGB tuple."""
@@ -175,7 +193,8 @@ def clear_all_leds():
 ## Blinks them, and then leaves them on the last color
 if __name__ == "__main__":
     clear_all_leds()
-    load_logo()
+    logo_path = "./image_builder/cu_logo_leds_lower.csv"
+    load_logo(logo_path, LEDS)
     LEDS.show()
     start = datetime.now()
     print("Loading stations from PostgreSQL...")
