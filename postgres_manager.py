@@ -136,8 +136,8 @@ class HistoricData(Base):
     # Relationship
     station: Mapped["Station"] = relationship("Station", back_populates="historic_data")
 
-    # Index for efficient queries
-    __table_args__ = (Index("idx_historic_timestamp", "station_id", "timestamp"),)
+    # Index for efficient timestamp queries (keep index narrow — timestamp only)
+    __table_args__ = (Index("idx_historic_timestamp", "timestamp"),)
 
     def to_dict(self):
         """Convert to dictionary"""

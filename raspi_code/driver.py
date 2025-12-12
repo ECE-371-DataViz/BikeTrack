@@ -156,13 +156,12 @@ def historic_mode(current_state, timestamp):
         print("No historic data for timestamp, moving to live", timestamp)
         db_manager.update_metadata(in_type=LIVE)
         return current_state
-    print(stations[0])
     for station in stations:
         position = station["index"]
         color = get_color(station)
         LEDS[position] = color
         current_state[station["station_id"]] = station
-    print("Historic mode: updated LEDs for timestamp", timestamp)
+    # print("Historic mode: updated LEDs for timestamp", timestamp)
     LEDS.show()
     return current_state
 

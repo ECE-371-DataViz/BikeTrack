@@ -31,6 +31,18 @@ def get_db_manager():
     return manager
 
 
+@st.cache_data(show_spinner="Fetching historic timestamps from PostgreSQL...")
+def fetch_timestamps():
+    db_manager = get_db_manager()
+    return db_manager.get_timestamps()
+
+
+@st.cache_data(show_spinner="Fetching historic snapshot from PostgreSQL...")
+def fetch_artifact(timestamp):
+    db_manager = get_db_manager()
+    return db_manager.get_artifact(timestamp)
+
+
 @st.cache_resource
 def get_gmaps_client():
     return googlemaps.Client(key=GOOGLE_MAPS)
@@ -567,8 +579,8 @@ def main():
         st.sidebar.subheader("Historic Station View")
         db_manager = get_db_manager()
         if db_manager:
-            # Use explicit timestamp list for precise historic selection
-            timestamps = db_manager.get_timestamps()
+            # Use explicit timestamp list for precise historic selection (cached)
+            timestamps = fetch_timestamps()
             if not timestamps:
                 st.error("No historic data available")
                 st.stop()
@@ -588,9 +600,10 @@ def main():
             )
             speed = st.sidebar.slider(
                 "Playback Speed (Seconds/Step)",
-                1,
-                60,
-                10,
+                0.1,
+                60.0,
+                10.0,
+                step=0.1,
                 key="historic_speed_slider",
             )
             st.session_state["historic_timestamp"] = selected_datetime
@@ -666,7 +679,8 @@ def main():
         station_list = db_manager.get_all_stations()
         if station_list and "historic_timestamp" in st.session_state:
             selected_timestamp = st.session_state["historic_timestamp"]
-            historic_data = db_manager.get_artifact(selected_timestamp)
+            # Fetch historic snapshot for the selected timestamp (cached per-timestamp)
+            historic_data = fetch_artifact(selected_timestamp)
             if historic_data:
                 stations_added = add_historic_view_stations(m, station_list, historic_data)
                 st.success(f"Displaying {stations_added} stations at {selected_timestamp.strftime('%Y-%m-%d %H:%M')}")
