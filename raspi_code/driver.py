@@ -67,11 +67,11 @@ def get_color(station):
     # Green if more than 25% of bikes are ebikes
     if station["bikes_available"] > 0 and (station["ebikes_available"] / station["bikes_available"]) > 0.25:
         base = COLOR_MAP["green"]
-        brightness = station["ebikes_available"] / (station["bikes_available"] + station["docks_available"])        
+        brightness = station["ebikes_available"]/ (station["bikes_available"] + station["docks_available"])        
     elif station["bikes_available"] > 0:
         base = COLOR_MAP["blue"]
         brightness = station["bikes_available"] / (station["bikes_available"] + station["docks_available"])
-    brightness = min(brightness, 1.0)
+    brightness = min(brightness+0.3, 1.0)
     return [int(b * brightness) for b in base]
 
 
