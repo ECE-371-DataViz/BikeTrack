@@ -156,11 +156,12 @@ def historic_mode(current_state, timestamp):
         print("No historic data for timestamp, moving to live", timestamp)
         db_manager.update_metadata(in_type=LIVE)
         return current_state
+    print(stations[0])
     for station in stations:
-        station_data = current_state[station]
-        position = station_data["index"]
-        color = get_color(station_data)
+        position = station["index"]
+        color = get_color(station)
         LEDS[position] = color
+        current_state[station["station_id"]] = station
     print("Historic mode: updated LEDs for timestamp", timestamp)
     LEDS.show()
     return current_state
@@ -181,11 +182,13 @@ if __name__ == "__main__":
     db_state = db_manager.get_metadata()
     mode = db_state.mode
     station_states = db_manager.get_all_station_status()
-    starting_timestamp = datetime.now()
-    ticks = 0
+
     # Historic playback state
+    starting_timestamp = datetime.now()
     historic_timestamps = []
+    viewing_idx = None
     historic_start_index = None
+    
     while True:
         try:
             s_time = time.time()
@@ -200,35 +203,27 @@ if __name__ == "__main__":
                 ticks = 0
             if mode == HISTORIC:
                 print("In Historic Mode")
-                # When the viewing timestamp changes (or we have no timestamps yet),
+                # When the viewing timestamp changes,
                 # load the full list of available historic timestamps and find the
                 # starting index to begin playback from.
-                if db_state.viewing_timestamp != starting_timestamp or not historic_timestamps:
+                if db_state.viewing_timestamp != starting_timestamp:
                     starting_timestamp = db_state.viewing_timestamp
-                    ticks = 0
                     historic_timestamps = db_manager.get_timestamps()
+                    viewing_idx = historic_timestamps.index(starting_timestamp)
                     if not historic_timestamps:
                         print("No historic timestamps available, switching to live")
                         db_manager.update_metadata(in_type=LIVE)
                         continue
-                    # Find the first timestamp >= requested starting timestamp
-                    start_idx = next((i for i, t in enumerate(historic_timestamps) if t >= starting_timestamp), None)
-                    if start_idx is None:
-                        print("Starting timestamp beyond available range, switching to live")
+                else:
+                    viewing_idx += 1
+                    if viewing_idx >= len(historic_timestamps):
+                        print("Reached end of historic timestamps, switching to live")
                         db_manager.update_metadata(in_type=LIVE)
                         continue
-                    historic_start_index = start_idx
 
-                cur_idx = historic_start_index + ticks
-                # If we run past the end of available timestamps, switch back to live
-                if cur_idx >= len(historic_timestamps):
-                    print("Reached end of historic timestamps, switching to live")
-                    db_manager.update_metadata(in_type=LIVE)
-                    continue
-
-                timestamp = historic_timestamps[cur_idx]
+                timestamp = historic_timestamps[viewing_idx]
+                print("Viewing historic timestamp:", timestamp)
                 historic_mode(station_states, timestamp)
-                ticks += 1
                 time.sleep(db_state.speed)
             else:
                 if mode == LIVE:
