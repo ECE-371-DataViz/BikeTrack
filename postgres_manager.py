@@ -556,6 +556,7 @@ if __name__ == "__main__":
     station_status_url = (
         "https://gbfs.lyft.com/gbfs/2.3/bkn/en/station_status.json"
     )
+    manager.update_metadata(in_type=LIVE)
     while True:
         time_diff = (datetime.now() - last_archive).total_seconds() / 60.0
         archive = time_diff >= HISTORY_PERIOD
