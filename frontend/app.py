@@ -598,21 +598,13 @@ def main():
                 value=st.session_state.get("historic_timestamp", min_time),
                 key="historic_time_slider",
             )
-            speed = st.sidebar.slider(
-                "Playback Speed (Seconds/Step)",
-                0.1,
-                60.0,
-                10.0,
-                step=0.1,
-                key="historic_speed_slider",
-            )
             st.session_state["historic_timestamp"] = selected_datetime
             st.sidebar.info(
                 "Stations are color-coded:\n\n🟢 Green = >10% of bikes are e-bikes\n\n🔵 Blue = Regular bikes available\n\n🔴 Red = No bikes available\n\n⚫ Grey = Out of service"
             )
             # Update metadata table for historic view
             db_manager.update_metadata(
-                in_type=HISTORIC, viewing_timestamp=selected_datetime, speed=speed
+                in_type=HISTORIC, viewing_timestamp=selected_datetime
             )
         else:
             st.sidebar.error("Could not connect to database")
