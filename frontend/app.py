@@ -1,4 +1,7 @@
+import json
+import logging
 import streamlit as st
+import streamlit.components.v1 as components
 import numpy as np
 import folium
 from streamlit_folium import st_folium
@@ -8,6 +11,9 @@ import polyline
 from postgres_manager import DBManager
 from globals import *
 from api_keys import *
+from trip_data import load_trips
+
+logger = logging.getLogger(__name__)
 
 
 def haversine_distance(lat1, lon1, lat2, lon2):
@@ -30,17 +36,6 @@ def get_db_manager():
     manager = DBManager(DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD)
     return manager
 
-
-@st.cache_data(show_spinner="Fetching historic timestamps from PostgreSQL...")
-def fetch_timestamps():
-    db_manager = get_db_manager()
-    return db_manager.get_timestamps()
-
-
-@st.cache_data(show_spinner="Fetching historic snapshot from PostgreSQL...")
-def fetch_artifact(timestamp):
-    db_manager = get_db_manager()
-    return db_manager.get_artifact(timestamp)
 
 
 @st.cache_resource
@@ -412,52 +407,192 @@ def general_view_render(map, station_list, gbfs_status):
     return stations_added
 
 
-def add_historic_view_stations(m, station_list, historic_data):
-    """Add stations to map with historic data"""
-    if not station_list or not historic_data:
-        return 0
+# ---------------------------------------------------------------------------
+# Trip Playback helpers
+# ---------------------------------------------------------------------------
 
-    # Create a lookup dict for historic data by station_id
-    historic_dict = {item["station_id"]: item for item in historic_data}
+@st.cache_data(show_spinner="Loading CitiBike trip data (this may take a moment)…")
+def load_playback_trips():
+    """Load and return a sample of CitiBike trip data from 2024 to present."""
+    return load_trips(sample_per_month=5000)
 
-    stations_added = 0
-    for station in station_list:
-        station_id = str(station["station_id"])
-        if station_id in historic_dict:
-            historic = historic_dict[station_id]
-            bikes = historic["bikes_available"]
-            ebikes = historic["ebikes_available"]
-            docks = historic["docks_available"]
-            regular_bikes = get_regular_bikes_count(bikes, ebikes)
 
-            # Get color based on availability
-            color = get_color_for_availability(bikes, ebikes, docks)
+@st.cache_data(show_spinner=False)
+def get_trip_route(start_lat: float, start_lng: float, end_lat: float, end_lng: float):
+    """Return a list of {lat, lng} dicts for the Google Maps bicycling route."""
+    client = get_gmaps_client()
+    try:
+        result = client.directions(
+            f"{start_lat},{start_lng}",
+            f"{end_lat},{end_lng}",
+            mode="bicycling",
+            alternatives=False,
+        )
+        if result:
+            encoded = result[0]["overview_polyline"]["points"]
+            decoded = polyline.decode(encoded)
+            return [{"lat": lat, "lng": lng} for lat, lng in decoded]
+    except Exception as exc:
+        logger.warning("Failed to get Google Maps route (%s, %s) -> (%s, %s): %s",
+                       start_lat, start_lng, end_lat, end_lng, exc)
+    return [
+        {"lat": start_lat, "lng": start_lng},
+        {"lat": end_lat, "lng": end_lng},
+    ]
 
-            # Create popup with station info
-            popup_html = f"""
-            <div style="font-family: Arial, sans-serif; min-width: 150px;">
-                <b>{station.get('name', 'Station ' + station_id)}</b><br>
-                <hr style="margin: 5px 0;">
-                🚲 Regular Bikes: {regular_bikes}<br>
-                ⚡ E-Bikes: {ebikes}<br>
-                🅿️ Docks: {docks}
-            </div>
-            """
 
-            folium.CircleMarker(
-                location=[station["latitude"], station["longitude"]],
-                radius=6,
-                color=color,
-                fill=True,
-                fill_color=color,
-                fill_opacity=0.7,
-                opacity=0.9,
-                weight=2,
-                popup=folium.Popup(popup_html, max_width=250),
-            ).add_to(m)
-            stations_added += 1
+@st.cache_data(show_spinner="Computing trip routes via Google Maps…")
+def compute_trip_routes(trips_df):
+    """
+    Compute Google Maps bicycling routes for every row in trips_df.
+    Returns a list of dicts: {path: [{lat, lng}…], duration: float (seconds)}.
+    Routes are cached so repeated calls for the same (start, end) are free.
+    """
+    result = []
+    for _, row in trips_df.iterrows():
+        try:
+            path = get_trip_route(
+                # Round to 4 d.p. (~11 m) so nearby trips share cached routes
+                round(float(row["start_lat"]), 4),
+                round(float(row["start_lng"]), 4),
+                round(float(row["end_lat"]), 4),
+                round(float(row["end_lng"]), 4),
+            )
+            result.append({"path": path, "duration": float(row["duration_seconds"])})
+        except Exception:
+            continue
+    return result
 
-    return stations_added
+
+def render_trip_playback(trip_routes: list, playback_speed: int, gmaps_key: str, height: int = 700) -> None:
+    """
+    Render animated CitiBike trip playback using the Google Maps JavaScript API.
+
+    Always maintains 10 active trips; when a trip ends a replacement begins
+    within a random 0-10 simulated-second window.  The route is visualised with
+    a spotlight effect: a bright window ±15% around the current position, with
+    the far-past fading out and the far-future shown faintly.
+    """
+    trips_json = json.dumps(trip_routes)
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+html,body{{height:100%}}
+#map{{width:100%;height:{height}px;background:#1a1a1a}}
+#hud{{position:absolute;top:10px;left:50%;transform:translateX(-50%);
+      background:rgba(0,0,0,.75);color:#ccc;padding:6px 14px;
+      border-radius:20px;font:12px/1.5 monospace;white-space:nowrap;
+      pointer-events:none}}
+</style></head><body>
+<div id="map"></div><div id="hud">Initialising…</div>
+<script>(function(){{
+  const trips={trips_json};
+  const SPEED={playback_speed};
+  const COLORS=['#FF6B6B','#4ECDC4','#45B7D1','#96CEB4','#FFD93D',
+                '#DDA0DD','#98D8C8','#FF9F43','#A29BFE','#FD79A8'];
+  const DARK=[
+    {{elementType:'geometry',stylers:[{{color:'#212121'}}]}},
+    {{elementType:'labels.text.fill',stylers:[{{color:'#757575'}}]}},
+    {{elementType:'labels.text.stroke',stylers:[{{color:'#212121'}}]}},
+    {{featureType:'water',elementType:'geometry',stylers:[{{color:'#000000'}}]}},
+    {{featureType:'road',elementType:'geometry.fill',stylers:[{{color:'#2c2c2c'}}]}},
+    {{featureType:'road.arterial',elementType:'geometry',stylers:[{{color:'#373737'}}]}},
+    {{featureType:'road.highway',elementType:'geometry',stylers:[{{color:'#3c3c3c'}}]}},
+    {{featureType:'poi',stylers:[{{visibility:'off'}}]}},
+    {{featureType:'transit',stylers:[{{visibility:'off'}}]}}
+  ];
+
+  let map,active={{}},nextIdx=0,simTime=0,prevTs=null;
+
+  window.initMap=function(){{
+    map=new google.maps.Map(document.getElementById('map'),{{
+      center:{{lat:40.7589,lng:-73.9851}},zoom:13,styles:DARK,
+      disableDefaultUI:true,zoomControl:true
+    }});
+    const n=Math.min(10,trips.length);
+    for(let i=0;i<n;i++) addTrip(i,0);
+    nextIdx=n;
+    requestAnimationFrame(frame);
+  }};
+
+  function addTrip(idx,t0){{
+    if(idx>=trips.length) return;
+    const trip=trips[idx],col=COLORS[idx%COLORS.length];
+    const dimPast=new google.maps.Polyline({{
+      path:[],strokeColor:col,strokeOpacity:.08,strokeWeight:3,map}});
+    const bright=new google.maps.Polyline({{
+      path:[trip.path[0]],strokeColor:col,strokeOpacity:.9,strokeWeight:5,map}});
+    const dimFuture=new google.maps.Polyline({{
+      path:trip.path,strokeColor:col,strokeOpacity:.2,strokeWeight:3,map}});
+    const dot=new google.maps.Marker({{
+      position:trip.path[0],map,
+      icon:{{path:google.maps.SymbolPath.CIRCLE,scale:7,
+             fillColor:col,fillOpacity:1,strokeColor:'#fff',strokeWeight:2}}
+    }});
+    active[idx]={{dot,dimPast,bright,dimFuture,t0}};
+  }}
+
+  function removeTrip(idx){{
+    const a=active[idx]; if(!a) return;
+    a.dot.setMap(null);a.dimPast.setMap(null);
+    a.bright.setMap(null);a.dimFuture.setMap(null);
+    delete active[idx];
+    // Start the next trip within 0-10 simulated seconds of the current time
+    // so we always keep ~10 trips active without jarring simultaneous starts.
+    if(nextIdx<trips.length){{
+      addTrip(nextIdx,simTime+Math.random()*10);
+      nextIdx++;
+    }}
+  }}
+
+  function lerp(p,q,t){{
+    return {{lat:p.lat+t*(q.lat-p.lat),lng:p.lng+t*(q.lng-p.lng)}};
+  }}
+  function atProg(path,prog){{
+    prog=Math.max(0,Math.min(1,prog));
+    const f=prog*(path.length-1),i=Math.min(Math.floor(f),path.length-2);
+    return lerp(path[i],path[i+1],f-i);
+  }}
+
+  function frame(ts){{
+    if(prevTs!==null) simTime+=(ts-prevTs)/1000*SPEED;
+    prevTs=ts;
+    const ended=[];
+    for(const [k,a] of Object.entries(active)){{
+      const trip=trips[+k],prog=(simTime-a.t0)/trip.duration;
+      if(prog>=1){{ended.push(+k);continue;}}
+      if(prog<0) continue;
+      const pos=atProg(trip.path,prog);
+      a.dot.setPosition(pos);
+      // SPOTLIGHT_WIN: fraction of total route shown bright around current pos (±15%)
+      const WIN=0.15,n=trip.path.length;
+      const lo=Math.max(0,prog-WIN),hi=Math.min(1,prog+WIN);
+      const iLo=Math.floor(lo*(n-1)),iHi=Math.ceil(hi*(n-1));
+      // far past (fades out)
+      a.dimPast.setPath(iLo>1?trip.path.slice(0,iLo+1):[]);
+      // spotlight window (bright)
+      const bSeg=trip.path.slice(iLo,iHi+1).concat([pos]);
+      a.bright.setPath(bSeg);
+      // future (faint, shows upcoming route)
+      a.dimFuture.setPath(iHi<n-1?trip.path.slice(iHi):[]);
+    }}
+    ended.forEach(removeTrip);
+    document.getElementById('hud').textContent=
+      'Active: '+Object.keys(active).length+'/10  ·  '+
+      'Trips: '+nextIdx+'/'+trips.length+'  ·  '+
+      SPEED+'× speed';
+    requestAnimationFrame(frame);
+  }}
+}})();
+</script>
+<script async
+  src="https://maps.googleapis.com/maps/api/js?key={gmaps_key}&callback=initMap&loading=async">
+</script>
+</body></html>"""
+
+    components.html(html, height=height + 10, scrolling=False)
+
 
 def init_session_states():
     # Initialize session state
@@ -479,13 +614,15 @@ def init_session_states():
         st.session_state["app_mode"] = "Route Finder"
     if "route_written" not in st.session_state:
         st.session_state["route_written"] = False
+    if "playback_active" not in st.session_state:
+        st.session_state["playback_active"] = False
 
 def main():
     # Mode selection
     st.sidebar.title("Mode Selection")
     app_mode = st.sidebar.radio(
         "Choose Mode:",
-        ["Route Finder", "General View", "Historic View"],
+        ["Route Finder", "General View", "Trip Playback"],
     )
     st.sidebar.divider()
 
@@ -575,122 +712,111 @@ def main():
             st.rerun()
         
 
-    elif app_mode == "Historic View":
-        st.sidebar.subheader("Historic Station View")
-        db_manager = get_db_manager()
-        if db_manager:
-            # Use explicit timestamp list for precise historic selection (cached)
-            timestamps = fetch_timestamps()
-            if not timestamps:
-                st.error("No historic data available")
-                st.stop()
-            min_time = timestamps[0]
-            max_time = timestamps[-1]
-            st.sidebar.write("📅 Data Range:")
-            st.sidebar.write(f"From: {min_time.strftime('%Y-%m-%d %H:%M')}")
-            st.sidebar.write(f"To: {max_time.strftime('%Y-%m-%d %H:%M')}")
-            if "historic_timestamp" not in st.session_state:
-                st.session_state["historic_timestamp"] = min_time
-            # Allow selecting an exact available timestamp (discrete options)
-            selected_datetime = st.sidebar.select_slider(
-                "Select Time:",
-                options=timestamps,
-                value=st.session_state.get("historic_timestamp", min_time),
-                key="historic_time_slider",
-            )
-            speed = st.sidebar.slider(
-                "Playback Speed (Seconds/Step)",
-                0.1,
-                60.0,
-                10.0,
-                step=0.1,
-                key="historic_speed_slider",
-            )
-            st.session_state["historic_timestamp"] = selected_datetime
-            st.sidebar.info(
-                "Stations are color-coded:\n\n🟢 Green = >10% of bikes are e-bikes\n\n🔵 Blue = Regular bikes available\n\n🔴 Red = No bikes available\n\n⚫ Grey = Out of service"
-            )
-            # Update metadata table for historic view
-            db_manager.update_metadata(
-                in_type=HISTORIC, viewing_timestamp=selected_datetime, speed=speed
-            )
-        else:
-            st.sidebar.error("Could not connect to database")
+    elif app_mode == "Trip Playback":
+        st.sidebar.subheader("Trip Playback")
+        playback_speed = st.sidebar.slider(
+            "Playback Speed (× real time)",
+            min_value=1,
+            max_value=200,
+            value=30,
+            step=1,
+            key="playback_speed_slider",
+        )
+        n_trips = st.sidebar.slider(
+            "Trips to preload",
+            min_value=20,
+            max_value=200,
+            value=100,
+            step=10,
+            key="n_trips_slider",
+        )
+        st.sidebar.info(
+            "Animates real CitiBike trips from 2024 using Google Maps routing.\n\n"
+            "10 trips run simultaneously; when one ends a new one begins."
+        )
+        if st.sidebar.button(
+            "▶ Start Playback", type="primary", use_container_width=True, key="start_playback"
+        ):
+            st.session_state["playback_active"] = True
+        if st.session_state.get("playback_active"):
+            if st.sidebar.button(
+                "⏹ Stop Playback", use_container_width=True, key="stop_playback"
+            ):
+                st.session_state["playback_active"] = False
 
-    # Map rendering section - common for all modes
-    db_manager = get_db_manager()
-    
-    # Create base map centered on Manhattan
-    m = folium.Map(
-        location=[40.7589, -73.9851],  # Manhattan center
-        zoom_start=13,
-        tiles="CartoDB dark_matter",
-    )
-    
-    # Render map based on selected mode
-    if app_mode == "Route Finder":
-        if st.session_state["run"] and o_c and d_c:
-            # Optimized call to find routes and stations (2 + num_routes DB calls)
-            result = find_route_stations(o_c, d_c, bike_type_value, station_threshold, num_routes)
-            
-            if result[0] is not None:
-                route_dict, paths, stations_per_route, start_station, end_station, features = result
-                
-                # Write to database only if not already written
-                if route_dict and not st.session_state.get("route_written", False):
-                    # Convert dict to list and write atomically
-                    route_list = [
-                        {"station_id": sid, "color": color}
-                        for sid, color in route_dict.items()
-                    ]
-                    db_manager.clear_route()
-                    db_manager.set_route_stations(route_list)
-                    st.session_state["route_written"] = True
-                
-                # Render routes on map
-                render_routes(
-                    m, paths, o_c, d_c, stations_per_route,
-                    st.session_state.get("selected_route"), bike_type_value, 
-                    start_station, end_station
+    # Map rendering section
+    if app_mode == "Trip Playback":
+        # Render Google Maps JS animation (no Folium map)
+        if st.session_state.get("playback_active"):
+            trips_df = load_playback_trips()
+            if trips_df is not None and len(trips_df) > 0:
+                routes = compute_trip_routes(trips_df.head(n_trips))
+                if routes:
+                    render_trip_playback(routes, playback_speed, GOOGLE_MAPS)
+                else:
+                    st.error("Could not compute routes. Check your Google Maps API key.")
+            else:
+                st.error(
+                    "No trip data available. Check internet connectivity — "
+                    "CitiBike trip files are downloaded from s3.amazonaws.com."
                 )
-                
-                # Show route info
-                st.subheader("Route Information")
-                for i, feature in enumerate(features, 1):
-                    with st.expander(f"Route {i}", expanded=(i == 1)):
-                        distance_km = feature["properties"]["distance"] / 1000
-                        duration_min = feature["properties"]["duration"] / 60
-                        st.write(f"Distance: {distance_km:.2f} km")
-                        st.write(f"Duration: {duration_min:.0f} minutes")
-            else:
-                st.error("Could not find a valid route. Please try different locations.")
-    elif app_mode == "General View":
-        # General View mode - show all stations with live data
-        station_list = db_manager.get_all_stations()
-        gbfs_status = get_station_status()
-        if station_list and gbfs_status:
-            stations_added = general_view_render(m, station_list, gbfs_status)
-            st.success(f"Displaying {stations_added} stations with live availability data")
         else:
-            st.error("Could not load station data")
-    
-    elif app_mode == "Historic View":
-        # Historic View mode - show stations with historic data
-        station_list = db_manager.get_all_stations()
-        if station_list and "historic_timestamp" in st.session_state:
-            selected_timestamp = st.session_state["historic_timestamp"]
-            # Fetch historic snapshot for the selected timestamp (cached per-timestamp)
-            historic_data = fetch_artifact(selected_timestamp)
-            if historic_data:
-                stations_added = add_historic_view_stations(m, station_list, historic_data)
-                st.success(f"Displaying {stations_added} stations at {selected_timestamp.strftime('%Y-%m-%d %H:%M')}")
+            st.info(
+                "Click **▶ Start Playback** in the sidebar to begin the animated "
+                "CitiBike trip overlay."
+            )
+    else:
+        db_manager = get_db_manager()
+
+        # Create base map centered on Manhattan
+        m = folium.Map(
+            location=[40.7589, -73.9851],
+            zoom_start=13,
+            tiles="CartoDB dark_matter",
+        )
+
+        if app_mode == "Route Finder":
+            if st.session_state["run"] and o_c and d_c:
+                result = find_route_stations(o_c, d_c, bike_type_value, station_threshold, num_routes)
+
+                if result[0] is not None:
+                    route_dict, paths, stations_per_route, start_station, end_station, features = result
+
+                    if route_dict and not st.session_state.get("route_written", False):
+                        route_list = [
+                            {"station_id": sid, "color": color}
+                            for sid, color in route_dict.items()
+                        ]
+                        db_manager.clear_route()
+                        db_manager.set_route_stations(route_list)
+                        st.session_state["route_written"] = True
+
+                    render_routes(
+                        m, paths, o_c, d_c, stations_per_route,
+                        st.session_state.get("selected_route"), bike_type_value,
+                        start_station, end_station
+                    )
+
+                    st.subheader("Route Information")
+                    for i, feature in enumerate(features, 1):
+                        with st.expander(f"Route {i}", expanded=(i == 1)):
+                            distance_km = feature["properties"]["distance"] / 1000
+                            duration_min = feature["properties"]["duration"] / 60
+                            st.write(f"Distance: {distance_km:.2f} km")
+                            st.write(f"Duration: {duration_min:.0f} minutes")
+                else:
+                    st.error("Could not find a valid route. Please try different locations.")
+
+        elif app_mode == "General View":
+            station_list = db_manager.get_all_stations()
+            gbfs_status = get_station_status()
+            if station_list and gbfs_status:
+                stations_added = general_view_render(m, station_list, gbfs_status)
+                st.success(f"Displaying {stations_added} stations with live availability data")
             else:
-                st.warning("No historic data available for selected time")
-        else:
-            st.error("Could not load station data")
-    
-    # Display the map
-    st_folium(m, use_container_width=True, height=1200, returned_objects=[])
+                st.error("Could not load station data")
+
+        st_folium(m, use_container_width=True, height=1200, returned_objects=[])
 
 if __name__ == "__main__":
     init_session_states()
