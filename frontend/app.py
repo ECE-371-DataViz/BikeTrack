@@ -1,4 +1,5 @@
 import json
+import logging
 import streamlit as st
 import streamlit.components.v1 as components
 import numpy as np
@@ -11,6 +12,8 @@ from postgres_manager import DBManager
 from globals import *
 from api_keys import *
 from trip_data import load_trips
+
+logger = logging.getLogger(__name__)
 
 
 def haversine_distance(lat1, lon1, lat2, lon2):
