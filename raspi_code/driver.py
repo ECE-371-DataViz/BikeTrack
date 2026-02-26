@@ -1,9 +1,12 @@
 ###
 # Pi specific imports
-import board
-import neopixel
+PI = False
+if PI:
+    import board
+    import neopixel
 
 ##
+import csv
 from datetime import datetime, timedelta
 import time
 from postgres_manager import DBManager
@@ -25,7 +28,20 @@ BLINK_DURATION = 1
 UPDATE_RATE = 1  # Seconds between update
 
 N_LEDS = 665
-LEDS = neopixel.NeoPixel(board.D18, N_LEDS, brightness=0.1, auto_write=False)
+if PI:
+    LEDS = neopixel.NeoPixel(board.D18, N_LEDS, brightness=0.1, auto_write=False)
+else:
+    class MOCK_LEDS:
+        def __init__(self, num_leds):
+            self.leds = [(0, 0, 0)] * num_leds
+        def __setitem__(self, index, color):
+            if 0 <= index < len(self.leds):
+                self.leds[index] = color
+        def fill(self, color):
+            self.leds = [color] * len(self.leds)
+        def show(self):
+            print("LED colors updated (simulation):")
+    LEDS = MOCK_LEDS(N_LEDS)
 
 def load_logo(csv_path, led_array):
     """
@@ -35,7 +51,6 @@ def load_logo(csv_path, led_array):
         csv_path: Path to the CSV file (index,r,g,b columns required)
         led_array: NeoPixel or similar array, modified in-place
     """
-    import csv
     with open(csv_path, 'r') as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -43,8 +58,7 @@ def load_logo(csv_path, led_array):
             r = int(row['r'])
             g = int(row['g'])
             b = int(row['b'])
-            if 0 <= idx < len(led_array):
-                led_array[idx] = (r, g, b)
+            led_array[idx] = (r, g, b)
 
 def hex_to_rgb(color_hex, default_color=COLOR_MAP["white"]):
     """Convert a hex color string (e.g., '#0077be') to an RGB tuple."""
