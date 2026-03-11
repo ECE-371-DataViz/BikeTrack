@@ -1,6 +1,7 @@
 import streamlit as st
 import numpy as np
 import folium
+from datetime import datetime, timedelta
 from streamlit_folium import st_folium
 from geopy.geocoders import Nominatim
 import googlemaps
@@ -171,9 +172,9 @@ def render_routes(map, paths, start, end, stations, selected_route=None, route_t
         start_location = (start_station["latitude"], start_station["longitude"]) if isinstance(start_station.get("latitude"), (int, float)) else start
         regular = get_regular_bikes_count(start_station.get("bikes_available", 0), start_station.get("ebikes_available", 0))
         start_popup = f"""
-        <div style=\"font-family: Arial, sans-serif; min-width: 150px;\">
-            <b>{start_station.get('name', start_station.get('station_id', 'Origin'))}</b><br>
-            <hr style=\"margin: 5px 0;\">
+        <div style=\"font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; min-width: 220px; padding: 6px;\">
+            <b style=\"font-size: 15px;\">{start_station.get('name', start_station.get('station_id', 'Origin'))}</b><br>
+            <hr style=\"margin: 6px 0;\">
             🚲 Bikes (total): {start_station.get('bikes_available', 0)}<br>
             ⚡ E-bikes: {start_station.get('ebikes_available', 0)}<br>
             🚴 Regular Bikes: {regular}
@@ -181,7 +182,7 @@ def render_routes(map, paths, start, end, stations, selected_route=None, route_t
         """
         folium.Marker(
             start_location,
-            popup=folium.Popup(start_popup, max_width=300),
+            popup=folium.Popup(start_popup, max_width=350),
             icon=folium.Icon(color=start_color, icon="play"),
         ).add_to(map)
     else:
@@ -194,9 +195,9 @@ def render_routes(map, paths, start, end, stations, selected_route=None, route_t
         end_location = (end_station["latitude"], end_station["longitude"]) if isinstance(end_station.get("latitude"), (int, float)) else end
         regular_end = get_regular_bikes_count(end_station.get("bikes_available", 0), end_station.get("ebikes_available", 0))
         end_popup = f"""
-        <div style=\"font-family: Arial, sans-serif; min-width: 150px;\">
-            <b>{end_station.get('name', end_station.get('station_id', 'Destination'))}</b><br>
-            <hr style=\"margin: 5px 0;\">
+        <div style=\"font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; min-width: 220px; padding: 6px;\">
+            <b style=\"font-size: 15px;\">{end_station.get('name', end_station.get('station_id', 'Destination'))}</b><br>
+            <hr style=\"margin: 6px 0;\">
             🚲 Bikes (total): {end_station.get('bikes_available', 0)}<br>
             ⚡ E-bikes: {end_station.get('ebikes_available', 0)}<br>
             🚴 Regular Bikes: {regular_end}
@@ -204,7 +205,7 @@ def render_routes(map, paths, start, end, stations, selected_route=None, route_t
         """
         folium.Marker(
             end_location,
-            popup=folium.Popup(end_popup, max_width=300),
+            popup=folium.Popup(end_popup, max_width=350),
             icon=folium.Icon(color="red", icon="stop"),
         ).add_to(map)
     else:
@@ -227,6 +228,12 @@ def render_routes(map, paths, start, end, stations, selected_route=None, route_t
             ).add_to(map)
         # Draw stations for this route using the same route color
         for station in stations[idx]:
+            stn_name = station.get('station_name', station.get('name', station.get('station_id', '')))
+            stn_popup = f"""
+            <div style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.5; min-width: 180px; padding: 4px;">
+                <b style="font-size: 15px;">{stn_name}</b>
+            </div>
+            """
             folium.CircleMarker(
                 location=[station["latitude"], station["longitude"]],
                 radius=5,
@@ -236,7 +243,7 @@ def render_routes(map, paths, start, end, stations, selected_route=None, route_t
                 fill_opacity=0.9,
                 opacity=0.9,
                 weight=1,
-                popup=f"Station: {station.get('station_name', station.get('name', station.get('station_id', '')))}",
+                popup=folium.Popup(stn_popup, max_width=300),
             ).add_to(map)
 
 def add_all_stations_to_map(m, station_list):
@@ -387,9 +394,9 @@ def general_view_render(map, station_list, gbfs_status):
 
             # Create popup with station info
             popup_html = f"""
-            <div style="font-family: Arial, sans-serif; min-width: 150px;">
-                <b>{station.get('name', ' ')}</b><br>
-                <hr style="margin: 5px 0;">
+            <div style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; min-width: 220px; padding: 6px;">
+                <b style="font-size: 15px;">{station.get('name', ' ')}</b><br>
+                <hr style="margin: 6px 0;">
                 🚲 Regular Bikes: {regular_bikes}<br>
                 ⚡ E-Bikes: {ebikes}<br>
                 🅿️ Docks: {docks}
@@ -405,7 +412,7 @@ def general_view_render(map, station_list, gbfs_status):
                 fill_opacity=0.7,
                 opacity=0.9,
                 weight=2,
-                popup=folium.Popup(popup_html, max_width=250),
+                popup=folium.Popup(popup_html, max_width=350),
             ).add_to(map)
             stations_added += 1
 
@@ -435,9 +442,9 @@ def add_historic_view_stations(m, station_list, historic_data):
 
             # Create popup with station info
             popup_html = f"""
-            <div style="font-family: Arial, sans-serif; min-width: 150px;">
-                <b>{station.get('name', 'Station ' + station_id)}</b><br>
-                <hr style="margin: 5px 0;">
+            <div style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; min-width: 220px; padding: 6px;">
+                <b style="font-size: 15px;">{station.get('name', 'Station ' + station_id)}</b><br>
+                <hr style="margin: 6px 0;">
                 🚲 Regular Bikes: {regular_bikes}<br>
                 ⚡ E-Bikes: {ebikes}<br>
                 🅿️ Docks: {docks}
@@ -453,11 +460,67 @@ def add_historic_view_stations(m, station_list, historic_data):
                 fill_opacity=0.7,
                 opacity=0.9,
                 weight=2,
-                popup=folium.Popup(popup_html, max_width=250),
+                popup=folium.Popup(popup_html, max_width=350),
             ).add_to(m)
             stations_added += 1
 
     return stations_added
+
+
+# ---- Historic trip playback ----
+
+TRIP_COLORS = [
+    "#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7",
+    "#DDA0DD", "#98D8C8", "#F7DC6F", "#BB8FCE", "#85C1E9",
+    "#FF8C00", "#32CD32", "#FF1493", "#00CED1", "#FFD700",
+    "#8A2BE2", "#FF4500", "#2E8B57", "#DA70D6", "#4169E1",
+]
+
+
+def start_historic_playback():
+    """Callback: write metadata for the driver, fetch trips for local map display."""
+    db = get_db_manager()
+    start_dt = datetime.combine(
+        st.session_state["hist_date"],
+        st.session_state["hist_time"],
+    )
+    speed = st.session_state["hist_speed"]
+    num = min(st.session_state["hist_num_trips"], 20)
+
+    # Write metadata so the driver knows to enter historic mode
+    db.update_metadata(
+        in_type=HISTORIC,
+        speed=speed,
+        viewing_timestamp=start_dt,
+        num_trips=num,
+    )
+
+    # Fetch trips locally for the Streamlit map display (driver selects its own)
+    trips = db.get_random_trips_in_window(start_dt, window_minutes=60, limit=num)
+    if not trips:
+        st.session_state["historic_playing"] = False
+        st.session_state["historic_no_trips"] = True
+        return
+
+    for i, t in enumerate(trips):
+        t["position"] = i
+        t["color"] = TRIP_COLORS[i % len(TRIP_COLORS)]
+
+    st.session_state.update({
+        "historic_playing": True,
+        "historic_no_trips": False,
+        "historic_trips": trips,
+    })
+
+
+def stop_historic_playback():
+    """Callback: stop playback by setting mode back to LIVE and clearing route data."""
+    st.session_state["historic_playing"] = False
+    st.session_state["historic_trips"] = []
+    db = get_db_manager()
+    db.clear_route()
+    db.update_metadata(in_type=LIVE)
+
 
 def init_session_states():
     # Initialize session state
@@ -479,6 +542,12 @@ def init_session_states():
         st.session_state["app_mode"] = "Route Finder"
     if "route_written" not in st.session_state:
         st.session_state["route_written"] = False
+    if "historic_playing" not in st.session_state:
+        st.session_state["historic_playing"] = False
+    if "historic_no_trips" not in st.session_state:
+        st.session_state["historic_no_trips"] = False
+    if "historic_trips" not in st.session_state:
+        st.session_state["historic_trips"] = []
 
 def main():
     # Mode selection
@@ -488,6 +557,10 @@ def main():
         ["Route Finder", "General View", "Historic View"],
     )
     st.sidebar.divider()
+
+    # Stop historic playback when switching away from Historic View
+    if app_mode != "Historic View" and st.session_state.get("historic_playing"):
+        stop_historic_playback()
 
     if app_mode == "Route Finder":
         st.sidebar.subheader("Route Settings")
@@ -576,46 +649,52 @@ def main():
         
 
     elif app_mode == "Historic View":
-        st.sidebar.subheader("Historic Station View")
-        db_manager = get_db_manager()
-        if db_manager:
-            # Use explicit timestamp list for precise historic selection (cached)
-            timestamps = fetch_timestamps()
-            if not timestamps:
-                st.error("No historic data available")
-                st.stop()
-            min_time = timestamps[0]
-            max_time = timestamps[-1]
-            st.sidebar.write("📅 Data Range:")
-            st.sidebar.write(f"From: {min_time.strftime('%Y-%m-%d %H:%M')}")
-            st.sidebar.write(f"To: {max_time.strftime('%Y-%m-%d %H:%M')}")
-            if "historic_timestamp" not in st.session_state:
-                st.session_state["historic_timestamp"] = min_time
-            # Allow selecting an exact available timestamp (discrete options)
-            selected_datetime = st.sidebar.select_slider(
-                "Select Time:",
-                options=timestamps,
-                value=st.session_state.get("historic_timestamp", min_time),
-                key="historic_time_slider",
-            )
-            speed = st.sidebar.slider(
-                "Playback Speed (Seconds/Step)",
-                0.1,
-                60.0,
-                10.0,
-                step=0.1,
-                key="historic_speed_slider",
-            )
-            st.session_state["historic_timestamp"] = selected_datetime
-            st.sidebar.info(
-                "Stations are color-coded:\n\n🟢 Green = >10% of bikes are e-bikes\n\n🔵 Blue = Regular bikes available\n\n🔴 Red = No bikes available\n\n⚫ Grey = Out of service"
-            )
-            # Update metadata table for historic view
-            db_manager.update_metadata(
-                in_type=HISTORIC, viewing_timestamp=selected_datetime, speed=speed
+        st.sidebar.subheader("Historic Trip Playback")
+        st.sidebar.date_input(
+            "Start Date",
+            value=datetime(2025, 9, 15).date(),
+            key="hist_date",
+        )
+        st.sidebar.time_input(
+            "Start Time",
+            value=datetime(2025, 9, 15, 8, 0).time(),
+            key="hist_time",
+        )
+        st.sidebar.slider(
+            "Playback Speed (x real-time)",
+            min_value=10,
+            max_value=500,
+            value=100,
+            step=10,
+            key="hist_speed",
+        )
+        st.sidebar.number_input(
+            "Number of Trips",
+            min_value=1,
+            max_value=20,
+            value=10,
+            step=1,
+            key="hist_num_trips",
+        )
+        if not st.session_state.get("historic_playing"):
+            st.sidebar.button(
+                "▶️ Start Playback",
+                on_click=start_historic_playback,
+                type="primary",
+                use_container_width=True,
             )
         else:
-            st.sidebar.error("Could not connect to database")
+            st.sidebar.button(
+                "⏹️ Stop Playback",
+                on_click=stop_historic_playback,
+                use_container_width=True,
+                type="secondary",
+            )
+        st.sidebar.info(
+            "Plays back random trips from the selected time window on the LED board. "
+            "The driver animates trips simultaneously along station paths; "
+            "completed trips flash and are replaced with new ones."
+        )
 
     # Map rendering section - common for all modes
     db_manager = get_db_manager()
@@ -675,22 +754,79 @@ def main():
             st.error("Could not load station data")
     
     elif app_mode == "Historic View":
-        # Historic View mode - show stations with historic data
-        station_list = db_manager.get_all_stations()
-        if station_list and "historic_timestamp" in st.session_state:
-            selected_timestamp = st.session_state["historic_timestamp"]
-            # Fetch historic snapshot for the selected timestamp (cached per-timestamp)
-            historic_data = fetch_artifact(selected_timestamp)
-            if historic_data:
-                stations_added = add_historic_view_stations(m, station_list, historic_data)
-                st.success(f"Displaying {stations_added} stations at {selected_timestamp.strftime('%Y-%m-%d %H:%M')}")
-            else:
-                st.warning("No historic data available for selected time")
+        if st.session_state.get("historic_no_trips"):
+            st.error("No trips found in the selected time window. Try a different start time.")
+            st.session_state["historic_no_trips"] = False
+
+        if st.session_state.get("historic_playing"):
+            trips = st.session_state["historic_trips"]
+
+            # Show all trips' start stations on the map (static)
+            for t in trips:
+                color = t["color"]
+                dur_min = t['duration_seconds'] / 60
+                bike_label = (t.get('rideable_type') or 'unknown').replace('_', ' ').title()
+                start_popup_html = f"""
+                <div style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; min-width: 240px; padding: 6px;">
+                    <b style="font-size: 15px;">🟢 {t['start_station_name']}</b><br>
+                    <hr style="margin: 6px 0;">
+                    ➡️ To: {t['end_station_name']}<br>
+                    ⏱️ Duration: {dur_min:.1f} min<br>
+                    🚲 Bike Type: {bike_label}
+                </div>
+                """
+                folium.CircleMarker(
+                    location=[t["start_lat"], t["start_lon"]],
+                    radius=7, color=color, fill=True, fill_color=color,
+                    fill_opacity=0.9, weight=2,
+                    popup=folium.Popup(start_popup_html, max_width=350),
+                ).add_to(m)
+                # Dashed line from start to end
+                folium.PolyLine(
+                    [[t["start_lat"], t["start_lon"]],
+                     [t["end_lat"], t["end_lon"]]],
+                    color=color, weight=2, opacity=0.35, dash_array="6 4",
+                ).add_to(m)
+                # Faded end-station marker
+                end_popup_html = f"""
+                <div style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; min-width: 240px; padding: 6px;">
+                    <b style="font-size: 15px;">🔴 {t['end_station_name']}</b><br>
+                    <hr style="margin: 6px 0;">
+                    ⬅️ From: {t['start_station_name']}<br>
+                    ⏱️ Duration: {dur_min:.1f} min<br>
+                    🚲 Bike Type: {bike_label}
+                </div>
+                """
+                folium.CircleMarker(
+                    location=[t["end_lat"], t["end_lon"]],
+                    radius=4, color=color, fill=True, fill_color=color,
+                    fill_opacity=0.3, weight=1,
+                    popup=folium.Popup(end_popup_html, max_width=350),
+                ).add_to(m)
         else:
-            st.error("Could not load station data")
+            st.info("Configure playback settings in the sidebar and click **Start Playback**.")
     
     # Display the map
     st_folium(m, use_container_width=True, height=1200, returned_objects=[])
+
+    # Historic playback: show trip summary below the map (static, no rerun)
+    if app_mode == "Historic View" and st.session_state.get("historic_playing"):
+        trips = st.session_state["historic_trips"]
+        st.success(
+            f"Playback started — {len(trips)} trips queued. "
+            f"The LED driver will animate them."
+        )
+        st.subheader("Sample Trips (driver will animate its own selection)")
+        table_data = []
+        for t in trips:
+            table_data.append({
+                "#": t["position"] + 1,
+                "From": t["start_station_name"][:30],
+                "To": t["end_station_name"][:30],
+                "Duration": f"{t['duration_seconds'] / 60:.1f} min",
+                "Type": t.get("rideable_type", ""),
+            })
+        st.table(table_data)
 
 if __name__ == "__main__":
     init_session_states()

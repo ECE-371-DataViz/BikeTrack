@@ -18,4 +18,7 @@ HISTORIC=3
 # Update interval in seconds
 UPDATE_INTERVAL = 30
 
-HISTORY_PERIOD = 5 # Minutes between historic data snapshots
+TRIP_UPDATE_INTERVAL = 60 * 60  * 24 * 30 # Every 30 Days
+
+S3_BUCKET_URL = "https://s3.amazonaws.com/tripdata"
+S3_NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"

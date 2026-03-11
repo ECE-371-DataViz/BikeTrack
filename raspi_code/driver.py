@@ -182,20 +182,128 @@ def route_mode():
     # Ensure final state is visible
     LEDS.show()
 
-def historic_mode(current_state, timestamp):
-    stations = db_manager.get_artifact(timestamp)
-    if len(stations) == 0:
-        print("No historic data for timestamp, moving to live", timestamp)
+def historic_mode():
+    """
+    Simplified historic mode — reads pre-computed route data from the route
+    table (written by postgres_manager) and renders trip groups based on their
+    appear_at / lifetime timing.  Blocks until mode changes or all groups finish.
+    """
+    # Wait for postgres_manager to prepare route data (it may take a moment)
+    route_data = None
+    for _ in range(30):  # Wait up to 15 seconds
+        meta = db_manager.get_metadata()
+        if meta.mode != HISTORIC:
+            print("Historic mode: mode changed while waiting for data, exiting")
+            return
+        route_data = db_manager.get_historic_route_data()
+        if route_data:
+            break
+        time.sleep(0.5)
+
+    if not route_data:
+        print("Historic mode: no route data prepared, switching to LIVE")
         db_manager.update_metadata(in_type=LIVE)
-        return current_state
-    for station in stations:
-        position = station["index"]
-        color = get_color(station)
-        LEDS[position] = color
-        current_state[station["station_id"]] = station
-    # print("Historic mode: updated LEDs for timestamp", timestamp)
-    LEDS.show()
-    return current_state
+        return
+
+    # Group entries by trip_group
+    groups = {}
+    for entry in route_data:
+        gid = entry["trip_group"]
+        if gid not in groups:
+            groups[gid] = {
+                "color": entry["color"],
+                "appear_at": entry["appear_at"],
+                "lifetime": entry["lifetime"],
+                "indices": [],
+            }
+        idx = entry["index"]
+        if 0 <= idx < N_LEDS:
+            groups[gid]["indices"].append(idx)
+
+    print(f"Historic mode: {len(groups)} trip groups to render")
+
+    playback_start = time.time()
+    active = {}   # gid -> group dict (currently lit)
+    pending = dict(groups)  # gid -> group dict (not yet activated)
+    finished = set()
+
+    clear_all_leds()
+
+    while True:
+        # Check for mode change
+        meta = db_manager.get_metadata()
+        if meta.mode != HISTORIC:
+            print("Historic mode: mode changed externally, exiting")
+            return
+
+        elapsed = time.time() - playback_start
+
+        # Activate pending groups whose appear_at has been reached
+        newly_active = []
+        for gid, g in list(pending.items()):
+            if elapsed >= g["appear_at"]:
+                active[gid] = g
+                del pending[gid]
+                newly_active.append(gid)
+
+        # Light up newly active groups one station at a time (route-mode style)
+        for gid in newly_active:
+            g = active[gid]
+            color = hex_to_rgb(g["color"])
+            for idx in g["indices"]:
+                LEDS[idx] = color
+                LEDS.show()
+                time.sleep(0.05)
+
+        # Check for expired groups
+        expired = []
+        for gid, g in list(active.items()):
+            if elapsed >= g["appear_at"] + g["lifetime"]:
+                expired.append(gid)
+
+        for gid in expired:
+            g = active[gid]
+            flash_indices = g["indices"]
+            flash_color = hex_to_rgb(g["color"])
+
+            # Compute base colors from other active groups (for shared LEDs)
+            base_colors = {}
+            for other_gid, other_g in active.items():
+                if other_gid == gid:
+                    continue
+                oc = hex_to_rgb(other_g["color"])
+                for oidx in other_g["indices"]:
+                    base_colors[oidx] = oc
+
+            # Flash 3 times
+            for _ in range(3):
+                for idx in flash_indices:
+                    LEDS[idx] = flash_color
+                LEDS.show()
+                time.sleep(0.3)
+                for idx in flash_indices:
+                    LEDS[idx] = base_colors.get(idx, (0, 0, 0))
+                LEDS.show()
+                time.sleep(0.3)
+
+            del active[gid]
+            finished.add(gid)
+
+            # Re-render remaining active groups
+            clear_all_leds()
+            for ag_gid, ag in active.items():
+                ac = hex_to_rgb(ag["color"])
+                for aidx in ag["indices"]:
+                    LEDS[aidx] = ac
+            LEDS.show()
+
+        # Done when nothing is active or pending
+        if not active and not pending:
+            print("Historic mode: all trip groups finished, switching to LIVE")
+            db_manager.update_metadata(in_type=LIVE)
+            return
+
+        time.sleep(0.5)
 
 
 def clear_all_leds():
@@ -218,19 +326,11 @@ if __name__ == "__main__":
     ## Keep logo up for 10 seconds
     time.sleep(10 - delta.total_seconds() if delta.total_seconds() < 10 else 0)
     LEDS.show()
-    mode_matcher = {LIVE: live_mode, ROUTE: route_mode, HISTORIC: historic_mode}
     db_state = db_manager.get_metadata()
     mode = db_state.mode
 
-    speed = None
     station_states = db_manager.get_all_station_status()
 
-    # Historic playback state
-    starting_timestamp = None
-    historic_timestamps = []
-    viewing_idx = None
-    historic_start_index = None
-    
     while True:
         # try:
             s_time = time.time()
@@ -239,40 +339,19 @@ if __name__ == "__main__":
                 print("Mode changed from", mode, "to", db_state.mode)
                 mode = db_state.mode
                 clear_all_leds()
-                # reset historic play state when mode changes
-                historic_timestamps = []
-                historic_start_index = None
-                ticks = 0
             if mode == HISTORIC:
-                if db_state.viewing_timestamp != starting_timestamp or speed != db_state.speed:
-                    speed = db_state.speed
-                    starting_timestamp = db_state.viewing_timestamp
-                    historic_timestamps = db_manager.get_timestamps()
-                    viewing_idx = historic_timestamps.index(starting_timestamp)
-                    if not historic_timestamps:
-                        print("No historic timestamps available, switching to live")
-                        db_manager.update_metadata(in_type=LIVE)
-                        starting_timestamp = None
-                        continue
-                else:
-                    viewing_idx += 1
-                    if viewing_idx >= len(historic_timestamps):
-                        print("Reached end of historic timestamps, switching to live")
-                        db_manager.update_metadata(in_type=LIVE)
-                        starting_timestamp = None
-                        continue
-
-                timestamp = historic_timestamps[viewing_idx]
-                print("Viewing historic timestamp:", timestamp)
-                historic_mode(station_states, timestamp)
-                time.sleep(speed)
-            else:
-                if mode == LIVE:
-                    station_states = live_mode(station_states)
-                elif mode == ROUTE:
-                    route_mode()
-                time_dormant = max(0, UPDATE_RATE - (time.time() - s_time))
-                time.sleep(time_dormant)
+                historic_mode()
+                # Re-read mode after historic_mode returns (it blocks until done)
+                db_state = db_manager.get_metadata()
+                mode = db_state.mode
+                clear_all_leds()
+                continue
+            elif mode == LIVE:
+                station_states = live_mode(station_states)
+            elif mode == ROUTE:
+                route_mode()
+            time_dormant = max(0, UPDATE_RATE - (time.time() - s_time))
+            time.sleep(time_dormant)
         # except Exception as e:
         #     print("Error in main loop: Changing system behavior to live mode", e)
         #     db_manager.update_metadata(in_type=LIVE)
