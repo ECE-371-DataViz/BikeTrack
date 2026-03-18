@@ -1,7 +1,7 @@
 import streamlit as st
 import numpy as np
 import folium
-from datetime import datetime, timedelta
+from datetime import datetime
 from streamlit_folium import st_folium
 from geopy.geocoders import Nominatim
 import googlemaps
@@ -55,11 +55,13 @@ def get_station_status():
     return db_manager.get_all_station_status()
 
 
-def find_route_stations(origin_coords, dest_coords, bike_type, station_threshold, num_routes=1):
+def find_route_stations(
+    origin_coords, dest_coords, bike_type, station_threshold, num_routes=1
+):
     """
     Optimized multi-route station finder.
     Returns combined route_dict for all routes plus per-route data for rendering.
-    
+
     Returns:
         route_dict: Combined {station_id: color} for all routes (for DB write)
         paths: List of paths for each route
@@ -69,27 +71,29 @@ def find_route_stations(origin_coords, dest_coords, bike_type, station_threshold
         features: List of Google Maps feature objects for each route
     """
     db_manager = get_db_manager()
-    
+
     # Find start and end stations (2 DB calls total, shared across all routes)
     start_station = db_manager.get_stations_by_distance(
-        origin_coords[0], origin_coords[1], limit=1, 
-        filter_type=bike_type if bike_type != "all" else "bikes"
+        origin_coords[0],
+        origin_coords[1],
+        limit=1,
+        filter_type=bike_type if bike_type != "all" else "bikes",
     )
     end_station = db_manager.get_stations_by_distance(
         dest_coords[0], dest_coords[1], limit=1, filter_type="docks"
     )
-    
+
     if not start_station or not end_station:
         return None, None, None, None, None, None
-    
+
     start_station = start_station[0]
     end_station = end_station[0]
-    
+
     # Get Google Maps directions for multiple routes
     directions = get_directions(origin_coords, dest_coords, num_routes)
     if not directions or not directions["features"]:
         return None, None, None, None, None, None
-    
+
     # Process all routes - accumulate stations in combined dict
     # Route color palette (matches map): violet, pink, orange
     route_colors = ["#8A2BE2", "#FF69B4", "#FFA500"]
@@ -105,7 +109,8 @@ def find_route_stations(origin_coords, dest_coords, bike_type, station_threshold
         paths.append([path])  # Wrapped in list for backward compatibility
 
         # Get stations along this specific path (1 DB call per route)
-        path_stations = db_manager.get_stations_on_path(path, station_threshold)
+        path_stations = db_manager.get_stations_on_path(
+            path, station_threshold)
         stations_per_route.append(path_stations)
 
         # Determine color for this route
@@ -158,8 +163,17 @@ def geocode(address: str):
     return (loc.latitude, loc.longitude)
 
 
-def render_routes(map, paths, start, end, stations, selected_route=None, route_type="bikes", start_station=None, end_station=None):
-    """Render routes and label origin/destination stations.
+def render_routes(
+    map,
+    paths,
+    start,
+    end,
+    selected_route=None,
+    route_type="bikes",
+    start_station=None,
+    end_station=None,
+):
+    """Render route lines and origin/destination markers.
 
     start_station and end_station are optional dicts that include station metadata
     (name, bikes_available, ebikes_available, docks_available). If provided,
@@ -169,8 +183,15 @@ def render_routes(map, paths, start, end, stations, selected_route=None, route_t
     start_color = "green" if route_type == "ebikes" else "blue"
     # Build origin popup
     if start_station:
-        start_location = (start_station["latitude"], start_station["longitude"]) if isinstance(start_station.get("latitude"), (int, float)) else start
-        regular = get_regular_bikes_count(start_station.get("bikes_available", 0), start_station.get("ebikes_available", 0))
+        start_location = (
+            (start_station["latitude"], start_station["longitude"])
+            if isinstance(start_station.get("latitude"), (int, float))
+            else start
+        )
+        regular = get_regular_bikes_count(
+            start_station.get("bikes_available", 0),
+            start_station.get("ebikes_available", 0),
+        )
         start_popup = f"""
         <div style=\"font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; min-width: 220px; padding: 6px;\">
             <b style=\"font-size: 15px;\">{start_station.get('name', start_station.get('station_id', 'Origin'))}</b><br>
@@ -192,8 +213,15 @@ def render_routes(map, paths, start, end, stations, selected_route=None, route_t
 
     # Build destination popup
     if end_station:
-        end_location = (end_station["latitude"], end_station["longitude"]) if isinstance(end_station.get("latitude"), (int, float)) else end
-        regular_end = get_regular_bikes_count(end_station.get("bikes_available", 0), end_station.get("ebikes_available", 0))
+        end_location = (
+            (end_station["latitude"], end_station["longitude"])
+            if isinstance(end_station.get("latitude"), (int, float))
+            else end
+        )
+        regular_end = get_regular_bikes_count(
+            end_station.get("bikes_available", 0),
+            end_station.get("ebikes_available", 0),
+        )
         end_popup = f"""
         <div style=\"font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; min-width: 220px; padding: 6px;\">
             <b style=\"font-size: 15px;\">{end_station.get('name', end_station.get('station_id', 'Destination'))}</b><br>
@@ -226,25 +254,7 @@ def render_routes(map, paths, start, end, stations, selected_route=None, route_t
                 weight=5,
                 opacity=0.85,
             ).add_to(map)
-        # Draw stations for this route using the same route color
-        for station in stations[idx]:
-            stn_name = station.get('station_name', station.get('name', station.get('station_id', '')))
-            stn_popup = f"""
-            <div style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.5; min-width: 180px; padding: 4px;">
-                <b style="font-size: 15px;">{stn_name}</b>
-            </div>
-            """
-            folium.CircleMarker(
-                location=[station["latitude"], station["longitude"]],
-                radius=5,
-                color=route_color,
-                fill=True,
-                fill_color=route_color,
-                fill_opacity=0.9,
-                opacity=0.9,
-                weight=1,
-                popup=folium.Popup(stn_popup, max_width=300),
-            ).add_to(map)
+
 
 def add_all_stations_to_map(m, station_list):
     if not station_list:
@@ -467,18 +477,58 @@ def add_historic_view_stations(m, station_list, historic_data):
     return stations_added
 
 
-# ---- Historic trip playback ----
+def build_route_station_color_maps(db_manager):
+    """Build station/trip color maps from active historic route rows."""
+    station_list = db_manager.get_all_stations()
+    station_color_map = db_manager.get_route_station_map()
+    trip_color_map = {}
 
-TRIP_COLORS = [
-    "#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7",
-    "#DDA0DD", "#98D8C8", "#F7DC6F", "#BB8FCE", "#85C1E9",
-    "#FF8C00", "#32CD32", "#FF1493", "#00CED1", "#FFD700",
-    "#8A2BE2", "#FF4500", "#2E8B57", "#DA70D6", "#4169E1",
-]
+    for group in db_manager.get_route_groups():
+        trip_id = group.get("trip_id")
+        if trip_id is not None and trip_id not in trip_color_map:
+            trip_color_map[trip_id] = group["color"]
+
+    return station_list, station_color_map, trip_color_map
+
+
+def render_route_station_colors(m, station_list, station_color_map):
+    """Render colored station dots from a station_id->color map."""
+    if not station_list or not station_color_map:
+        return 0
+
+    stations_added = 0
+    for station in station_list:
+        sid = str(station["station_id"])
+        color = station_color_map.get(sid)
+        if not color:
+            continue
+        popup_html = f"""
+        <div style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.5; min-width: 180px; padding: 4px;">
+            <b style="font-size: 15px;">{station.get('name', sid)}</b><br>
+            <hr style="margin: 6px 0;">
+            🎨 Route Color: {color}
+        </div>
+        """
+        folium.CircleMarker(
+            location=[station["latitude"], station["longitude"]],
+            radius=6,
+            color=color,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.85,
+            opacity=0.9,
+            weight=2,
+            popup=folium.Popup(popup_html, max_width=320),
+        ).add_to(m)
+        stations_added += 1
+    return stations_added
+
+
+# ---- Historic trip playback ----
 
 
 def start_historic_playback():
-    """Callback: write metadata for the driver, fetch trips for local map display."""
+    """Callback: write metadata for the driver and fetch route-backed map data."""
     db = get_db_manager()
     start_dt = datetime.combine(
         st.session_state["hist_date"],
@@ -487,67 +537,75 @@ def start_historic_playback():
     speed = st.session_state["hist_speed"]
     num = min(st.session_state["hist_num_trips"], 20)
 
-    # Write metadata so the driver knows to enter historic mode
+    # Set playback metadata and seed the historic queue.
     db.update_metadata(
         in_type=HISTORIC,
         speed=speed,
         viewing_timestamp=start_dt,
         num_trips=num,
     )
-
-    # Fetch trips locally for the Streamlit map display (driver selects its own)
-    trips = db.get_random_trips_in_window(start_dt, window_minutes=60, limit=num)
-    if not trips:
+    db.clear_route(set_live=False)
+    loaded = db.load_trips(start_dt, num)
+    if loaded == 0:
         st.session_state["historic_playing"] = False
         st.session_state["historic_no_trips"] = True
         return
 
-    for i, t in enumerate(trips):
-        t["position"] = i
-        t["color"] = TRIP_COLORS[i % len(TRIP_COLORS)]
+    station_list, station_color_map, trip_color_map = build_route_station_color_maps(db)
 
-    st.session_state.update({
-        "historic_playing": True,
-        "historic_no_trips": False,
-        "historic_trips": trips,
-    })
+    # Fetch trip metadata for map popups/table and align colors with route rows.
+    trips = db.get_random_trips_in_window(start_dt)
+    trips = [t for t in trips if t.get("trip_id") in trip_color_map]
+    trips = trips[:num]
+
+    for i, t in enumerate(trips, start=1):
+        t["position"] = i
+        t["color"] = trip_color_map.get(t.get("trip_id"), "#FFFFFF")
+
+    st.session_state.update(
+        {
+            "historic_playing": True,
+            "historic_no_trips": False,
+            "historic_trips": trips,
+            "historic_station_color_map": station_color_map,
+            "historic_station_count": len(station_list),
+        }
+    )
 
 
 def stop_historic_playback():
-    """Callback: stop playback by setting mode back to LIVE and clearing route data."""
+    """Callback: stop playback by setting mode back to LIVE and clearing historic queue."""
     st.session_state["historic_playing"] = False
     st.session_state["historic_trips"] = []
+    st.session_state["historic_station_color_map"] = {}
+    st.session_state["historic_station_count"] = 0
     db = get_db_manager()
-    db.clear_route()
+    db.clear_route(set_live=False)
     db.update_metadata(in_type=LIVE)
 
 
 def init_session_states():
-    # Initialize session state
-    if "click_origin" not in st.session_state:
-        st.session_state["click_origin"] = None
-    if "click_destination" not in st.session_state:
-        st.session_state["click_destination"] = None
-    if "click_explore" not in st.session_state:
-        st.session_state["click_explore"] = None
-    if "setting_origin" not in st.session_state:
-        st.session_state["setting_origin"] = True
-    if "run" not in st.session_state:
-        st.session_state["run"] = False
-    if "zoom_to_station" not in st.session_state:
-        st.session_state["zoom_to_station"] = None
-    if "selected_route" not in st.session_state:
-        st.session_state["selected_route"] = None
-    if "app_mode" not in st.session_state:
-        st.session_state["app_mode"] = "Route Finder"
-    if "route_written" not in st.session_state:
-        st.session_state["route_written"] = False
-    if "historic_playing" not in st.session_state:
-        st.session_state["historic_playing"] = False
-    if "historic_no_trips" not in st.session_state:
-        st.session_state["historic_no_trips"] = False
-    if "historic_trips" not in st.session_state:
-        st.session_state["historic_trips"] = []
+    needed_keys = [
+        "click_origin",
+        "click_destination",
+        "click_explore",
+        "run",
+        "zoom_to_station",
+        "selected_route",
+        "app_mode",
+        "route_written",
+        "historic_playing",
+        "historic_no_trips",
+        "historic_trips",
+        "historic_station_color_map",
+        "historic_station_count",
+    ]
+    for key in needed_keys:
+        if key not in st.session_state:
+            st.session_state[key] = None
+    st.session_state["app_mode"] = "General View"  # Default mode
+    st.session_state["historic_trips"] = []
+
 
 def main():
     # Mode selection
@@ -628,15 +686,15 @@ def main():
                 use_container_width=True,
                 type="secondary",
             )
-            ## Run the route rendering logic, and show that data in the db
-            
+            # Run the route rendering logic, and show that data in the db
+
     elif app_mode == "General View":
         st.sidebar.subheader("Live Station View")
         st.sidebar.info(
-            "Viewing all stations with current availability. Stations are color-coded:" \
-            "\n\n🟢 Green = >10% of bikes are e-bikes" \
-            "\n\n🔵 Blue = Regular bikes available" \
-            "\n\n🔴 Red = No bikes available" \
+            "Viewing all stations with current availability. Stations are color-coded:"
+            "\n\n🟢 Green = >10% of bikes are e-bikes"
+            "\n\n🔵 Blue = Regular bikes available"
+            "\n\n🔴 Red = No bikes available"
             "\n\n⚫ Grey = Out of service"
         )
         db_manager = get_db_manager()
@@ -646,7 +704,6 @@ def main():
         ):
             st.cache_data.clear()
             st.rerun()
-        
 
     elif app_mode == "Historic View":
         st.sidebar.subheader("Historic Trip Playback")
@@ -698,23 +755,29 @@ def main():
 
     # Map rendering section - common for all modes
     db_manager = get_db_manager()
-    
+
     # Create base map centered on Manhattan
     m = folium.Map(
         location=[40.7589, -73.9851],  # Manhattan center
         zoom_start=13,
         tiles="CartoDB dark_matter",
     )
-    
+
     # Render map based on selected mode
     if app_mode == "Route Finder":
         if st.session_state["run"] and o_c and d_c:
             # Optimized call to find routes and stations (2 + num_routes DB calls)
-            result = find_route_stations(o_c, d_c, bike_type_value, station_threshold, num_routes)
-            
+            result = find_route_stations(
+                o_c, d_c, bike_type_value, station_threshold, num_routes)
+
             if result[0] is not None:
-                route_dict, paths, stations_per_route, start_station, end_station, features = result
-                
+                (route_dict,
+                    paths,
+                    stations_per_route,
+                    start_station,
+                    end_station,
+                    features) = result
+
                 # Write to database only if not already written
                 if route_dict and not st.session_state.get("route_written", False):
                     # Convert dict to list and write atomically
@@ -725,14 +788,21 @@ def main():
                     db_manager.clear_route()
                     db_manager.set_route_stations(route_list)
                     st.session_state["route_written"] = True
-                
+
                 # Render routes on map
-                render_routes(
-                    m, paths, o_c, d_c, stations_per_route,
-                    st.session_state.get("selected_route"), bike_type_value, 
-                    start_station, end_station
+                render_routes(m, paths, o_c, d_c,
+                    st.session_state.get("selected_route"),
+                    bike_type_value,
+                    start_station,
+                    end_station)
+
+                route_station_map = db_manager.get_route_station_map()
+                render_route_station_colors(
+                    m,
+                    db_manager.get_all_stations(),
+                    route_station_map,
                 )
-                
+
                 # Show route info
                 st.subheader("Route Information")
                 for i, feature in enumerate(features, 1):
@@ -742,30 +812,42 @@ def main():
                         st.write(f"Distance: {distance_km:.2f} km")
                         st.write(f"Duration: {duration_min:.0f} minutes")
             else:
-                st.error("Could not find a valid route. Please try different locations.")
+                st.error(
+                    "Could not find a valid route. Please try different locations."
+                )
     elif app_mode == "General View":
         # General View mode - show all stations with live data
         station_list = db_manager.get_all_stations()
         gbfs_status = get_station_status()
         if station_list and gbfs_status:
             stations_added = general_view_render(m, station_list, gbfs_status)
-            st.success(f"Displaying {stations_added} stations with live availability data")
+            st.success(
+                f"Displaying {stations_added} stations with live availability data"
+            )
         else:
             st.error("Could not load station data")
-    
+
     elif app_mode == "Historic View":
         if st.session_state.get("historic_no_trips"):
-            st.error("No trips found in the selected time window. Try a different start time.")
+            st.error(
+                "No trips found in the selected time window. Try a different start time."
+            )
             st.session_state["historic_no_trips"] = False
 
         if st.session_state.get("historic_playing"):
+            station_list, station_color_map, _ = build_route_station_color_maps(
+                db_manager
+            )
+            rendered = render_route_station_colors(m, station_list, station_color_map)
             trips = st.session_state["historic_trips"]
 
-            # Show all trips' start stations on the map (static)
+            # Show sampled trip start/end pairs using colors sourced from route rows.
             for t in trips:
                 color = t["color"]
-                dur_min = t['duration_seconds'] / 60
-                bike_label = (t.get('rideable_type') or 'unknown').replace('_', ' ').title()
+                dur_min = t["duration_seconds"] / 60
+                bike_label = (
+                    (t.get("rideable_type") or "unknown").replace("_", " ").title()
+                )
                 start_popup_html = f"""
                 <div style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; min-width: 240px; padding: 6px;">
                     <b style="font-size: 15px;">🟢 {t['start_station_name']}</b><br>
@@ -777,15 +859,22 @@ def main():
                 """
                 folium.CircleMarker(
                     location=[t["start_lat"], t["start_lon"]],
-                    radius=7, color=color, fill=True, fill_color=color,
-                    fill_opacity=0.9, weight=2,
+                    radius=7,
+                    color=color,
+                    fill=True,
+                    fill_color=color,
+                    fill_opacity=0.9,
+                    weight=2,
                     popup=folium.Popup(start_popup_html, max_width=350),
                 ).add_to(m)
                 # Dashed line from start to end
                 folium.PolyLine(
                     [[t["start_lat"], t["start_lon"]],
-                     [t["end_lat"], t["end_lon"]]],
-                    color=color, weight=2, opacity=0.35, dash_array="6 4",
+                        [t["end_lat"], t["end_lon"]]],
+                    color=color,
+                    weight=2,
+                    opacity=0.35,
+                    dash_array="6 4",
                 ).add_to(m)
                 # Faded end-station marker
                 end_popup_html = f"""
@@ -799,13 +888,22 @@ def main():
                 """
                 folium.CircleMarker(
                     location=[t["end_lat"], t["end_lon"]],
-                    radius=4, color=color, fill=True, fill_color=color,
-                    fill_opacity=0.3, weight=1,
+                    radius=4,
+                    color=color,
+                    fill=True,
+                    fill_color=color,
+                    fill_opacity=0.3,
+                    weight=1,
                     popup=folium.Popup(end_popup_html, max_width=350),
                 ).add_to(m)
+            st.caption(
+                f"Rendering {rendered} active route stations from the shared route backend."
+            )
         else:
-            st.info("Configure playback settings in the sidebar and click **Start Playback**.")
-    
+            st.info(
+                "Configure playback settings in the sidebar and click **Start Playback**."
+            )
+
     # Display the map
     st_folium(m, use_container_width=True, height=1200, returned_objects=[])
 
@@ -819,14 +917,17 @@ def main():
         st.subheader("Sample Trips (driver will animate its own selection)")
         table_data = []
         for t in trips:
-            table_data.append({
-                "#": t["position"] + 1,
-                "From": t["start_station_name"][:30],
-                "To": t["end_station_name"][:30],
-                "Duration": f"{t['duration_seconds'] / 60:.1f} min",
-                "Type": t.get("rideable_type", ""),
-            })
+            table_data.append(
+                {
+                    "#": t["position"] + 1,
+                    "From": t["start_station_name"][:30],
+                    "To": t["end_station_name"][:30],
+                    "Duration": f"{t['duration_seconds'] / 60:.1f} min",
+                    "Type": t.get("rideable_type", ""),
+                }
+            )
         st.table(table_data)
+
 
 if __name__ == "__main__":
     init_session_states()

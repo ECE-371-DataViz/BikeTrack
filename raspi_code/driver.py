@@ -11,54 +11,38 @@ from datetime import datetime, timedelta
 import time
 from postgres_manager import DBManager
 from globals import *
-# Constants
-COLOR_MAP = {
-    "red": (255, 0, 0),
-    "green": (0, 255, 0),
-    "blue": (0, 0, 255),
-    "white": (255, 255, 255),
-    "blank": (0, 0, 0),
-}
 
-
-# The LED behavior depends on the driver itself...
-# LEDS = [0] * 700  # placeholder for LED strip
-NUM_BLINKS = 5
-BLINK_DURATION = 1
-UPDATE_RATE = 1  # Seconds between update
-
-N_LEDS = 665
 if PI:
     LEDS = neopixel.NeoPixel(board.D18, N_LEDS, brightness=0.1, auto_write=False)
 else:
+
     class MOCK_LEDS:
         def __init__(self, num_leds):
             self.leds = [(0, 0, 0)] * num_leds
+
         def __setitem__(self, index, color):
             if 0 <= index < len(self.leds):
                 self.leds[index] = color
+
         def fill(self, color):
             self.leds = [color] * len(self.leds)
+
         def show(self):
             print("LED colors updated (simulation):")
+
     LEDS = MOCK_LEDS(N_LEDS)
 
+
 def load_logo(csv_path, led_array):
-    """
-    Load LED color values from a CSV and set them in the provided LED array.
-    Does not loop or call show().
-    Args:
-        csv_path: Path to the CSV file (index,r,g,b columns required)
-        led_array: NeoPixel or similar array, modified in-place
-    """
-    with open(csv_path, 'r') as f:
+    with open(csv_path, "r") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            idx = int(row['index'])
-            r = int(row['r'])
-            g = int(row['g'])
-            b = int(row['b'])
+            idx = int(row["index"])
+            r = int(row["r"])
+            g = int(row["g"])
+            b = int(row["b"])
             led_array[idx] = (r, g, b)
+
 
 def hex_to_rgb(color_hex, default_color=COLOR_MAP["white"]):
     """Convert a hex color string (e.g., '#0077be') to an RGB tuple."""
@@ -82,7 +66,7 @@ def init_live():
     for station in stations:
         station_id = station["station_id"]
         base_state[station_id] = station
-        index = station["index"] 
+        index = station["index"]
         color = get_color(station)
         LEDS[index] = color
     return base_state
@@ -92,17 +76,24 @@ def get_color(station):
     # Turn off LED if station has no bikes and no docks (out of service)
     if station["bikes_available"] == 0 and station["docks_available"] == 0:
         return (0, 0, 0)
-    
+
     base = COLOR_MAP["red"]
     brightness = station["docks_available"] / 25.5
     # Green if more than 25% of bikes are ebikes
-    if station["bikes_available"] > 0 and (station["ebikes_available"] / station["bikes_available"]) > 0.25:
+    if (
+        station["bikes_available"] > 0
+        and (station["ebikes_available"] / station["bikes_available"]) > 0.25
+    ):
         base = COLOR_MAP["green"]
-        brightness = station["ebikes_available"]/ (station["bikes_available"] + station["docks_available"])        
+        brightness = station["ebikes_available"] / (
+            station["bikes_available"] + station["docks_available"]
+        )
     elif station["bikes_available"] > 0:
         base = COLOR_MAP["blue"]
-        brightness = station["bikes_available"] / (station["bikes_available"] + station["docks_available"])
-    brightness = min(brightness+0.1, 1.0)
+        brightness = station["bikes_available"] / (
+            station["bikes_available"] + station["docks_available"]
+        )
+    brightness = min(brightness + 0.1, 1.0)
     return [int(b * brightness) for b in base]
 
 
@@ -151,157 +142,119 @@ def live_mode(current_state):
     return current_state
 
 
+def render_grouped_routes(groups, animated_keys=None, step_delay=0.0):
+    """Render grouped route data returned by DBManager.get_route_groups()."""
+    clear_all_leds()
+    animated_keys = animated_keys or set()
+    for g in groups:
+        color = hex_to_rgb(g["color"], COLOR_MAP["white"])
+        animate = g["group_key"] in animated_keys
+        for idx in g["indices"]:
+            LEDS[idx] = color
+            if animate:
+                LEDS.show()
+                time.sleep(step_delay)
+    LEDS.show()
+
+
 ##Assume completely dark backdrop
 def route_mode():
-    # get_route_stations() returns a dict mapping station_id -> color_hex
-    route_map = db_manager.get_route_stations()
-    if not route_map:
+    groups = db_manager.get_route_groups()
+    if not groups:
         print("Route mode: route map is empty, switching to LIVE mode")
         db_manager.update_metadata(in_type=LIVE)
         return
-    # Build a station lookup table by station_id for quick access
-    all_stations = db_manager.get_all_stations()
-    
-    station_map = {s["station_id"]: s for s in all_stations}
-    clear_all_leds()
-    for station_id, color_hex in route_map.items():
-        station = station_map.get(station_id)
-        if not station:
-            print(f"Warning: station_id {station_id} not found in station map")
-            continue
-        index = station.get("index")
-        if index is None or not isinstance(index, int) or index < 0 or index >= N_LEDS:
-            print(f"Warning: invalid index for station {station_id}: {index}")
-            continue
+    animated_keys = {g["group_key"] for g in groups}
+    render_grouped_routes(groups, animated_keys=animated_keys, step_delay=0.1)
 
-        color = hex_to_rgb(color_hex, COLOR_MAP["white"])
-        LEDS[index] = color
-        LEDS.show()
-        # Slowly light up each LED from bottom to top
-        time.sleep(0.1)
-    # Ensure final state is visible
-    LEDS.show()
 
 def historic_mode():
-    """
-    Simplified historic mode — reads pre-computed route data from the route
-    table (written by postgres_manager) and renders trip groups based on their
-    appear_at / lifetime timing.  Blocks until mode changes or all groups finish.
-    """
-    # Wait for postgres_manager to prepare route data (it may take a moment)
-    route_data = None
-    for _ in range(30):  # Wait up to 15 seconds
-        meta = db_manager.get_metadata()
-        if meta.mode != HISTORIC:
-            print("Historic mode: mode changed while waiting for data, exiting")
-            return
-        route_data = db_manager.get_historic_route_data()
-        if route_data:
-            break
-        time.sleep(0.5)
+    """Historic playback loop using DB queue operations.
 
-    if not route_data:
-        print("Historic mode: no route data prepared, switching to LIVE")
+    Startup:
+    1) clear existing historic rows
+    2) load N trips around metadata timestamp via load_trips()
+
+    Runtime:
+    - render active trips from route table
+    - when a mapped trip expires, remove_trip(source_trip_id)
+    - load one replacement trip to keep queue size stable
+    """
+    meta = db_manager.get_metadata()
+    seed_timestamp = meta.viewing_timestamp or datetime.now()
+    seed_count = max(1, int(meta.num_trips or 1))
+    playback_speed = max(1, int(meta.speed or 1))
+    replacement_cursor = seed_timestamp
+
+    clear_all_leds()
+    db_manager.clear_route(set_live=False)
+    loaded = db_manager.load_trips(seed_timestamp, seed_count)
+    if loaded == 0:
+        print("Historic mode: no trips available to load, switching to LIVE")
         db_manager.update_metadata(in_type=LIVE)
         return
 
-    # Group entries by trip_group
-    groups = {}
-    for entry in route_data:
-        gid = entry["trip_group"]
-        if gid not in groups:
-            groups[gid] = {
-                "color": entry["color"],
-                "appear_at": entry["appear_at"],
-                "lifetime": entry["lifetime"],
-                "indices": [],
-            }
-        idx = entry["index"]
-        if 0 <= idx < N_LEDS:
-            groups[gid]["indices"].append(idx)
-
-    print(f"Historic mode: {len(groups)} trip groups to render")
-
-    playback_start = time.time()
-    active = {}   # gid -> group dict (currently lit)
-    pending = dict(groups)  # gid -> group dict (not yet activated)
-    finished = set()
-
-    clear_all_leds()
+    rendered_groups = set()
 
     while True:
-        # Check for mode change
         meta = db_manager.get_metadata()
         if meta.mode != HISTORIC:
             print("Historic mode: mode changed externally, exiting")
             return
 
-        elapsed = time.time() - playback_start
+        now_ts = time.time()
+        groups = db_manager.get_route_groups()
+        if not groups:
+            print("Historic mode: route queue empty, switching to LIVE")
+            db_manager.update_metadata(in_type=LIVE)
+            return
 
-        # Activate pending groups whose appear_at has been reached
-        newly_active = []
-        for gid, g in list(pending.items()):
-            if elapsed >= g["appear_at"]:
-                active[gid] = g
-                del pending[gid]
-                newly_active.append(gid)
+        # Animate only newly loaded trips.
+        newly_rendered = set()
+        for g in groups:
+            group_key = g["group_key"]
+            if group_key in rendered_groups:
+                continue
+            newly_rendered.add(group_key)
+            rendered_groups.add(group_key)
 
-        # Light up newly active groups one station at a time (route-mode style)
-        for gid in newly_active:
-            g = active[gid]
-            color = hex_to_rgb(g["color"])
-            for idx in g["indices"]:
-                LEDS[idx] = color
-                LEDS.show()
-                time.sleep(0.05)
+        if newly_rendered:
+            render_grouped_routes(groups, animated_keys=newly_rendered, step_delay=0.05)
 
-        # Check for expired groups
-        expired = []
-        for gid, g in list(active.items()):
-            if elapsed >= g["appear_at"] + g["lifetime"]:
-                expired.append(gid)
+        expired_groups = [
+            g
+            for g in groups
+            if g.get("maps_to_trip")
+            and now_ts >= float(g["appear_at"]) + float(g["lifetime"])
+        ]
 
-        for gid in expired:
-            g = active[gid]
+        for g in expired_groups:
+            group_key = g["group_key"]
             flash_indices = g["indices"]
-            flash_color = hex_to_rgb(g["color"])
+            flash_color = hex_to_rgb(g["color"], COLOR_MAP["white"])
 
-            # Compute base colors from other active groups (for shared LEDs)
-            base_colors = {}
-            for other_gid, other_g in active.items():
-                if other_gid == gid:
-                    continue
-                oc = hex_to_rgb(other_g["color"])
-                for oidx in other_g["indices"]:
-                    base_colors[oidx] = oc
-
-            # Flash 3 times
+            # Flash the ending trip before replacement.
             for _ in range(3):
                 for idx in flash_indices:
                     LEDS[idx] = flash_color
                 LEDS.show()
-                time.sleep(0.3)
+                time.sleep(0.25)
                 for idx in flash_indices:
-                    LEDS[idx] = base_colors.get(idx, (0, 0, 0))
+                    LEDS[idx] = COLOR_MAP["blank"]
                 LEDS.show()
-                time.sleep(0.3)
+                time.sleep(0.25)
 
-            del active[gid]
-            finished.add(gid)
+            db_manager.remove_trip(g.get("trip_id"))
+            rendered_groups.discard(group_key)
 
-            # Re-render remaining active groups
-            clear_all_leds()
-            for ag_gid, ag in active.items():
-                ac = hex_to_rgb(ag["color"])
-                for aidx in ag["indices"]:
-                    LEDS[aidx] = ac
-            LEDS.show()
+            replacement_cursor = replacement_cursor + timedelta(
+                seconds=max(1.0, float(g["lifetime"]) * playback_speed)
+            )
+            db_manager.load_trips(replacement_cursor, 1)
 
-        # Done when nothing is active or pending
-        if not active and not pending:
-            print("Historic mode: all trip groups finished, switching to LIVE")
-            db_manager.update_metadata(in_type=LIVE)
-            return
+        if expired_groups:
+            groups = db_manager.get_route_groups()
+            render_grouped_routes(groups)
 
         time.sleep(0.5)
 
@@ -311,6 +264,7 @@ def clear_all_leds():
     # print("Clearing all LEDs...")
     LEDS.fill(COLOR_MAP["blank"])
     LEDS.show()
+
 
 ## Blinks them, and then leaves them on the last color
 if __name__ == "__main__":
@@ -333,26 +287,26 @@ if __name__ == "__main__":
 
     while True:
         # try:
-            s_time = time.time()
+        s_time = time.time()
+        db_state = db_manager.get_metadata()
+        if db_state.mode != mode:
+            print("Mode changed from", mode, "to", db_state.mode)
+            mode = db_state.mode
+            clear_all_leds()
+        if mode == HISTORIC:
+            historic_mode()
+            # Re-read mode after historic_mode returns (it blocks until done)
             db_state = db_manager.get_metadata()
-            if db_state.mode != mode:
-                print("Mode changed from", mode, "to", db_state.mode)
-                mode = db_state.mode
-                clear_all_leds()
-            if mode == HISTORIC:
-                historic_mode()
-                # Re-read mode after historic_mode returns (it blocks until done)
-                db_state = db_manager.get_metadata()
-                mode = db_state.mode
-                clear_all_leds()
-                continue
-            elif mode == LIVE:
-                station_states = live_mode(station_states)
-            elif mode == ROUTE:
-                route_mode()
-            time_dormant = max(0, UPDATE_RATE - (time.time() - s_time))
-            time.sleep(time_dormant)
-        # except Exception as e:
-        #     print("Error in main loop: Changing system behavior to live mode", e)
-        #     db_manager.update_metadata(in_type=LIVE)
-        #     time.sleep(5)
+            mode = db_state.mode
+            clear_all_leds()
+            continue
+        elif mode == LIVE:
+            station_states = live_mode(station_states)
+        elif mode == ROUTE:
+            route_mode()
+        time_dormant = max(0, UPDATE_RATE - (time.time() - s_time))
+        time.sleep(time_dormant)
+    # except Exception as e:
+    #     print("Error in main loop: Changing system behavior to live mode", e)
+    #     db_manager.update_metadata(in_type=LIVE)
+    #     time.sleep(5)
