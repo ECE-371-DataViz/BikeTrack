@@ -42,60 +42,30 @@ S3_BUCKET_URL = "https://s3.amazonaws.com/tripdata"
 S3_NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
 INFO_URL = "https://gbfs.lyft.com/gbfs/2.3/bkn/en/station_information.json"
 
-# 50 distinct colors for historic trip rendering
+# Distinct colors for historic trip rendering (up to 20 concurrent trips)
 HISTORIC_STATION_THRESHOLD = 200  # meters
 HISTORIC_TRIP_WINDOWS_MINUTES = [30, 60, 120]
 HISTORIC_TRIP_CANDIDATE_MULTIPLIER = 5
-HISTORIC_TRIP_MAX_QUERY_LIMIT = 250
+HISTORIC_TRIP_MAX_QUERY_LIMIT = 20
 HISTORIC_COLORS = [
-    "#FF0000",
-    "#00FF00",
-    "#0000FF",
-    "#FFFF00",
-    "#FF00FF",
-    "#00FFFF",
-    "#FF8000",
-    "#FF0080",
-    "#80FF00",
-    "#00FF80",
-    "#0080FF",
-    "#8000FF",
-    "#FF4000",
-    "#FF0040",
-    "#40FF00",
-    "#00FF40",
-    "#0040FF",
-    "#4000FF",
-    "#FFC000",
-    "#FF00C0",
-    "#C0FF00",
-    "#00FFC0",
-    "#00C0FF",
-    "#C000FF",
-    "#FF6600",
-    "#FF0066",
-    "#66FF00",
-    "#00FF66",
-    "#0066FF",
-    "#6600FF",
-    "#FFAA00",
-    "#FF00AA",
-    "#AAFF00",
-    "#00FFAA",
-    "#00AAFF",
-    "#AA00FF",
-    "#FF3333",
-    "#33FF33",
-    "#3333FF",
-    "#FFFF33",
-    "#FF33FF",
-    "#33FFFF",
-    "#FF6633",
-    "#33FF66",
-    "#6633FF",
-    "#FFCC33",
-    "#CC33FF",
-    "#33FFCC",
-    "#FF9933",
-    "#9933FF",
+    "#E6194B",  # red
+    "#3CB44B",  # green
+    "#4363D8",  # blue
+    "#F58231",  # orange
+    "#911EB4",  # purple
+    "#46F0F0",  # cyan
+    "#F032E6",  # magenta
+    "#BCF60C",  # lime
+    "#FABED4",  # pink
+    "#008080",  # teal
+    "#E6BEFF",  # lavender
+    "#9A6324",  # brown
+    "#FFFAC8",  # beige
+    "#800000",  # maroon
+    "#AAFFC3",  # mint
+    "#808000",  # olive
+    "#FFD8B1",  # apricot
+    "#000075",  # navy
+    "#808080",  # gray
+    "#FF4500",  # orange red
 ]

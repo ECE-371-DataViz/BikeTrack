@@ -9,7 +9,8 @@ see db_helpers.py instead.
 import requests
 import time
 from datetime import datetime, timedelta
-from sqlalchemy import create_engine, ForeignKey, Index, select, func
+from sqlalchemy import create_engine, ForeignKey, Index, select, func, cast
+from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.orm import (
     aliased,
     sessionmaker,
@@ -22,9 +23,9 @@ from sqlalchemy.orm import (
 from typing import List, Optional
 from sqlalchemy import URL
 from sqlalchemy.orm import sessionmaker, relationship, DeclarativeBase
-from geoalchemy2 import Geometry
+from geoalchemy2 import Geometry, Geography
 from globals import *
-import random
+import time
 
 
 # SQLAlchemy ORM Base
@@ -258,20 +259,101 @@ class DBManager:
             return [station.to_dict() for station in stations]
 
     def set_route_stations(self, route_stations):
-        """Write route-finder stations (permanent, lifetime=-1)."""
+        """Write route-finder stations with sequential appear_at times for animation.
+        
+        Stations appear sequentially from nearest to farthest from the route start.
+        Uses PostGIS distance ordering only (no Python distance fallback).
+        """
+        if not route_stations:
+            return
+        
         with self.Session_eng() as session:
             session.query(Route).delete()
-            for station_data in route_stations:
+            now_ts = time.time()
+            animation_duration = 5.0  # 5 seconds total animation
+
+            station_ids = [s["station_id"] for s in route_stations]
+            start_station_id = station_ids[0]
+            input_order = {sid: i for i, sid in enumerate(station_ids)}
+
+            start_geom_subquery = (
+                session.query(Station.geom)
+                .filter(
+                    Station.station_id == start_station_id,
+                    Station.geom.isnot(None),
+                )
+                .scalar_subquery()
+            )
+
+            start_station_exists = (
+                session.query(Station.station_id)
+                .filter(
+                    Station.station_id == start_station_id,
+                    Station.geom.isnot(None),
+                )
+                .first()
+            )
+
+            if start_station_exists is None:
+                raise ValueError(
+                    f"Missing PostGIS geometry for start station {start_station_id}"
+                )
+
+            distance_rows = (
+                session.query(
+                    Station.station_id,
+                    func.ST_Distance(
+                        cast(Station.geom, Geography),
+                        cast(start_geom_subquery, Geography),
+                    ).label("distance_m"),
+                )
+                .filter(
+                    Station.station_id.in_(station_ids),
+                    Station.geom.isnot(None),
+                )
+                .all()
+            )
+
+            if len(distance_rows) < len(set(station_ids)):
+                missing = sorted(
+                    set(station_ids) - {station_id for station_id, _ in distance_rows}
+                )
+                raise ValueError(
+                    f"Missing PostGIS geometry for route stations: {', '.join(missing)}"
+                )
+
+            sorted_station_ids = [
+                station_id
+                for station_id, _ in sorted(
+                    distance_rows,
+                    key=lambda t: (float(t[1]), input_order.get(t[0], 10**9)),
+                )
+            ]
+
+            route_by_station_id = {
+                station_data["station_id"]: station_data for station_data in route_stations
+            }
+            sorted_stations = [
+                route_by_station_id[sid]
+                for sid in sorted_station_ids
+                if sid in route_by_station_id
+            ]
+
+            num_stations = len(sorted_stations)
+            for idx, station_data in enumerate(sorted_stations):
+                # Space out appear_at times so route grows from start to finish
+                appear_at = now_ts + (idx / num_stations) * animation_duration if num_stations > 1 else now_ts
+                
                 route = Route(
                     station_id=station_data["station_id"],
                     color=station_data.get("color", "#ffffff"),
-                    appear_at=0.0,
-                    lifetime=-1.0,
+                    appear_at=appear_at,
+                    lifetime=animation_duration,
                 )
                 session.add(route)
             self.update_metadata(session, in_type=ROUTE)
             session.commit()
-        print(f"✓ Stored {len(route_stations)} route stations in PostgreSQL")
+        print(f"✓ Stored {len(route_stations)} route stations in PostgreSQL with sequential animation")
 
     def get_route_rows(self):
         """Fetch active route rows joined with station index for rendering."""
@@ -317,23 +399,34 @@ class DBManager:
         return station_map
 
     def _get_path_station_ids(self, trip):
-        """Get station IDs on a trip path sorted from start to end."""
-        path = [
-            [trip["start_lat"], trip["start_lon"]],
-            [trip["end_lat"], trip["end_lon"]],
-        ]
-        stations = self.get_stations_on_path(path, HISTORIC_STATION_THRESHOLD)
-        if not stations:
-            return []
-
-        slat, slon = trip["start_lat"], trip["start_lon"]
-        elat, elon = trip["end_lat"], trip["end_lon"]
-        dx, dy = elon - slon, elat - slat
-        if dx != 0 or dy != 0:
-            stations.sort(
-                key=lambda s: (s["longitude"] - slon) * dx + (s["latitude"] - slat) * dy
+        """Get station IDs on a trip path sorted from start to end using PostGIS."""
+        with self.Session_eng() as session:
+            start_point = func.ST_SetSRID(
+                func.ST_MakePoint(trip["start_lon"], trip["start_lat"]), 4326
             )
-        return [s["station_id"] for s in stations]
+            end_point = func.ST_SetSRID(
+                func.ST_MakePoint(trip["end_lon"], trip["end_lat"]), 4326
+            )
+            linestring_geom = func.ST_SetSRID(
+                func.ST_MakeLine(array([start_point, end_point])),
+                4326,
+            )
+            linestring_geog = cast(linestring_geom, Geography)
+            locate_expr = func.ST_LineLocatePoint(linestring_geom, Station.geom)
+            rows = (
+                session.query(Station.station_id, locate_expr.label("path_pos"))
+                .filter(
+                    Station.geom.isnot(None),
+                    func.ST_DWithin(
+                        cast(Station.geom, Geography),
+                        linestring_geog,
+                        HISTORIC_STATION_THRESHOLD,
+                    ),
+                )
+                .order_by(locate_expr)
+                .all()
+            )
+            return [station_id for station_id, _ in rows]
 
     def clear_route(self, set_live=True):
         """Clear all active route rows."""
@@ -369,6 +462,10 @@ class DBManager:
                 .all()
             }
             loaded = 0
+            if not HISTORIC_COLORS:
+                color_cycle = ["#FFFFFF"]
+            else:
+                color_cycle = HISTORIC_COLORS
 
             for trip in candidate_trips:
                 if loaded >= target_count:
@@ -380,15 +477,22 @@ class DBManager:
                 if not station_ids:
                     continue
 
-                color = random.choice(HISTORIC_COLORS)
+                # Assign highly distinct colors before repeating.
+                color = color_cycle[loaded % len(color_cycle)]
                 lifetime = max(trip["duration_seconds"] / speed, 3.0)
 
-                for station_id in station_ids:
+                # Space out station appearances to animate route growth from start to finish
+                num_stations = len(station_ids)
+                for station_idx, station_id in enumerate(station_ids):
+                    # Each station appears at a different time for animation
+                    # appear_at = now_ts + (station_idx / num_stations) * lifetime
+                    appear_at = now_ts + (station_idx / num_stations) * lifetime if num_stations > 1 else now_ts
+                    
                     session.add(
                         Route(
                             station_id=station_id,
                             color=color,
-                            appear_at=now_ts,
+                            appear_at=appear_at,
                             lifetime=lifetime,
                             source_trip_id=trip["trip_id"],
                         )
@@ -404,6 +508,86 @@ class DBManager:
                     viewing_timestamp=timestamp,
                     num_trips=(
                         meta.num_trips if meta and meta.num_trips else target_count
+                    ),
+                )
+            session.commit()
+            return loaded
+
+    def load_trips_with_gmaps_paths(self, trips_with_paths):
+        """Load historic trips using pre-calculated Google Maps paths.
+        
+        This finds stations along the actual Google Maps bicycling route,
+        not a direct line between start and end.
+        
+        Args:
+            trips_with_paths: List of trip dicts with:
+                - trip_id, start_lat, start_lon, end_lat, end_lon, duration_seconds, ...
+                - path: list of [lat, lon] coordinates from Google Maps route
+        """
+        if not trips_with_paths:
+            return 0
+        
+        meta = self.get_metadata()
+        speed = (meta.speed if meta and meta.speed else 100) or 100
+        now_ts = time.time()
+        
+        with self.Session_eng() as session:
+            existing_trip_ids = {
+                row[0]
+                for row in session.query(Route.source_trip_id)
+                .filter(Route.lifetime >= 0, Route.source_trip_id.isnot(None))
+                .all()
+            }
+            loaded = 0
+            if not HISTORIC_COLORS:
+                color_cycle = ["#FFFFFF"]
+            else:
+                color_cycle = HISTORIC_COLORS
+            
+            for trip in trips_with_paths:
+                if trip.get("trip_id") in existing_trip_ids:
+                    continue
+                
+                # Get stations along the Google Maps path (not direct line)
+                path = trip.get("path", [])
+                if not path or len(path) < 2:
+                    continue
+                
+                # get_stations_on_path returns list of station dicts, extract the IDs
+                stations_info = self.get_stations_on_path(path, HISTORIC_STATION_THRESHOLD)
+                if not stations_info:
+                    continue
+                station_ids = [s["station_id"] for s in stations_info]
+                
+                # Assign highly distinct colors before repeating.
+                color = color_cycle[loaded % len(color_cycle)]
+                lifetime = max(trip.get("duration_seconds", 0) / speed, 3.0)
+                
+                # Space out station appearances to animate route growth from start to finish
+                num_stations = len(station_ids)
+                for station_idx, station_id in enumerate(station_ids):
+                    appear_at = now_ts + (station_idx / num_stations) * lifetime if num_stations > 1 else now_ts
+                    
+                    session.add(
+                        Route(
+                            station_id=station_id,
+                            color=color,
+                            appear_at=appear_at,
+                            lifetime=lifetime,
+                            source_trip_id=trip.get("trip_id"),
+                        )
+                    )
+                
+                existing_trip_ids.add(trip.get("trip_id"))
+                loaded += 1
+            
+            if loaded:
+                self.update_metadata(
+                    session,
+                    in_type=HISTORIC,
+                    viewing_timestamp=meta.viewing_timestamp,
+                    num_trips=(
+                        meta.num_trips if meta and meta.num_trips else loaded
                     ),
                 )
             session.commit()
@@ -431,13 +615,17 @@ class DBManager:
         making it much faster than the previous Euclidean approximation.
         """
         with self.Session_eng() as session:
-            # Create a point geometry from the input coordinates
-            point_geom = func.ST_SetSRID(func.ST_MakePoint(longitude, latitude), 4326)
+            # Use PostGIS geography distance so result is in meters.
+            point_geog = cast(
+                func.ST_SetSRID(func.ST_MakePoint(longitude, latitude), 4326),
+                Geography,
+            )
+            distance_expr = func.ST_Distance(
+                cast(Station.geom, Geography),
+                point_geog,
+            ).label("distance_m")
 
-            # Calculate distance in meters using PostGIS
-            distance_expr = func.ST_Distance(Station.geom, point_geom).label("distance")
-
-            query = session.query(Station, distance_expr)
+            query = session.query(Station, distance_expr).filter(Station.geom.isnot(None))
 
             # Get the closest one with bikes or docks if specified
             if filter_type == "bikes":
@@ -465,12 +653,20 @@ class DBManager:
         threshold_meters: distance threshold in meters
         """
         with self.Session_eng() as session:
-            # Build a linestring from the path points
-            # Convert path from (lat, lon) to (lon, lat) for PostGIS (WGS84)
-            path_coords = " ".join(f"{lon} {lat}" for lat, lon in path)
+            if not path or len(path) < 2:
+                return []
+
+            # Build path geometry from numeric points to avoid WKT parsing issues.
+            line_points = [
+                func.ST_SetSRID(func.ST_MakePoint(lon, lat), 4326)
+                for lat, lon in path
+            ]
             linestring_geom = func.ST_SetSRID(
-                func.ST_GeomFromText(f"LINESTRING({path_coords})"), 4326
+                func.ST_MakeLine(array(line_points)),
+                4326,
             )
+            linestring_geog = cast(linestring_geom, Geography)
+            locate_expr = func.ST_LineLocatePoint(linestring_geom, Station.geom)
 
             # Use ST_DWithin for a distance buffer query
             # This is much faster than checking each station manually
@@ -478,12 +674,14 @@ class DBManager:
             stations = (
                 session.query(Station)
                 .where(
+                    Station.geom.isnot(None),
                     func.ST_DWithin(
-                        func.ST_GeogFromWKB(Station.geom),
-                        func.ST_GeogFromWKB(linestring_geom),
+                        cast(Station.geom, Geography),
+                        linestring_geog,
                         threshold_meters,
                     )
                 )
+                .order_by(locate_expr)
                 .all()
             )
 
@@ -509,7 +707,9 @@ class DBManager:
             return status_dict
 
     def save_route(self, route_stats, selected_route=None):
-        """Write route stations and their colors to PostgreSQL
+        """Write route stations and their colors to PostgreSQL with sequential animation.
+        
+        Stations appear sequentially to create a growing animation effect.
 
         Args:
             route_stats: List of route statistics with station data
@@ -519,8 +719,11 @@ class DBManager:
             # Clear existing route data
             session.query(Route).delete()
 
-            # Collect all stations to write using vectorized approach
+            # Collect all stations to write with sequential appear_at times
+            now_ts = time.time()
             stations_to_write = []
+            animation_duration = 5.0  # 5 seconds total animation
+            
             for idx, stat in enumerate(route_stats):
                 should_include = (selected_route is None) or (selected_route == idx)
                 if (
@@ -530,18 +733,25 @@ class DBManager:
                 ):
                     color = stat["color"]
                     df = stat["route_stations"]
-                    # Vectorized conversion to avoid iterrows()
-                    stations_to_write.extend(
-                        {"station_id": str(sid), "color": color}
-                        for sid in df["station_id"]
-                    )
+                    num_stations = len(df)
+                    
+                    # Vectorized conversion with sequential appear_at times
+                    for station_idx, sid in enumerate(df["station_id"]):
+                        # Space out appear_at times so route grows from start to finish
+                        appear_at = now_ts + (station_idx / num_stations) * animation_duration if num_stations > 1 else now_ts
+                        stations_to_write.append({
+                            "station_id": str(sid),
+                            "color": color,
+                            "appear_at": appear_at,
+                            "lifetime": animation_duration,
+                        })
 
             # Bulk insert using bulk_insert_mappings for better performance
             if stations_to_write:
                 session.bulk_insert_mappings(Route, stations_to_write)
                 self.update_metadata(session, in_type=ROUTE)
                 session.commit()
-                print(f"✓ Wrote {len(stations_to_write)} route stations to PostgreSQL")
+                print(f"✓ Wrote {len(stations_to_write)} route stations to PostgreSQL with sequential animation")
                 return len(stations_to_write)
             return 0
 
@@ -605,6 +815,51 @@ class DBManager:
 
             result = []
             for trip, start_stn, end_stn in trips:
+                duration = (trip.ended_at - trip.started_at).total_seconds()
+                if duration <= 0:
+                    continue
+                result.append(
+                    {
+                        "trip_id": trip.id,
+                        "started_at": trip.started_at,
+                        "ended_at": trip.ended_at,
+                        "duration_seconds": duration,
+                        "rideable_type": trip.rideable_type,
+                        "start_station_id": start_stn.station_id,
+                        "start_station_name": start_stn.name,
+                        "start_lat": start_stn.latitude,
+                        "start_lon": start_stn.longitude,
+                        "end_station_id": end_stn.station_id,
+                        "end_station_name": end_stn.name,
+                        "end_lat": end_stn.latitude,
+                        "end_lon": end_stn.longitude,
+                    }
+                )
+
+            return result
+
+    def get_trips_by_ids(self, trip_ids):
+        """Get trip details for an explicit set of trip IDs."""
+        if not trip_ids:
+            return []
+
+        StartStation = aliased(Station)
+        EndStation = aliased(Station)
+
+        with self.Session_eng() as session:
+            rows = (
+                session.query(TripData, StartStation, EndStation)
+                .join(
+                    StartStation,
+                    StartStation.short_name == TripData.start_station_id,
+                )
+                .join(EndStation, EndStation.short_name == TripData.end_station_id)
+                .filter(TripData.id.in_(trip_ids))
+                .all()
+            )
+
+            result = []
+            for trip, start_stn, end_stn in rows:
                 duration = (trip.ended_at - trip.started_at).total_seconds()
                 if duration <= 0:
                     continue

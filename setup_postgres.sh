@@ -24,6 +24,13 @@ if ! command -v psql &> /dev/null; then
     sudo apt install -y postgresql postgresql-contrib
 fi
 
+# Install PostGIS extension packages required by db_helpers.migrate_schema()
+echo -e "${BLUE}Ensuring PostGIS packages are installed...${NC}"
+PG_MAJOR=$(psql -V | sed -E 's/.* ([0-9]+)\..*/\1/')
+sudo apt update
+sudo apt install -y postgis "postgresql-${PG_MAJOR}-postgis-3" || \
+sudo apt install -y postgis postgresql-postgis
+
 # Start PostgreSQL service
 echo -e "${BLUE}Starting PostgreSQL service...${NC}"
 sudo systemctl start postgresql
@@ -63,6 +70,11 @@ GRANT ALL PRIVILEGES ON DATABASE biketrack_db TO biketracker;
 
 -- Connect to the database and set schema privileges
 \c biketrack_db
+
+-- Enable required spatial extensions
+CREATE EXTENSION IF NOT EXISTS postgis;
+CREATE EXTENSION IF NOT EXISTS postgis_topology;
+
 GRANT ALL PRIVILEGES ON SCHEMA public TO biketracker;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO biketracker;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO biketracker;

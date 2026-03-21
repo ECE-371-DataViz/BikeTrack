@@ -28,7 +28,8 @@ else:
             self.leds = [color] * len(self.leds)
 
         def show(self):
-            print("LED colors updated (simulation):")
+            pass
+            # print("LED colors updated (simulation):")
 
     LEDS = MOCK_LEDS(N_LEDS)
 
@@ -122,6 +123,7 @@ def blink(update_list):
 
 
 def live_mode(current_state):
+    print("Entering live mode...")
     stations = db_manager.get_all_stations()
     update_list = {}
     for station in stations:
@@ -144,8 +146,8 @@ def live_mode(current_state):
 
 def render_grouped_routes(groups, animated_keys=None, step_delay=0.0):
     """Render grouped route data returned by DBManager.get_route_groups()."""
-    clear_all_leds()
     animated_keys = animated_keys or set()
+    clear_all_leds()
     for g in groups:
         color = hex_to_rgb(g["color"], COLOR_MAP["white"])
         animate = g["group_key"] in animated_keys
@@ -159,34 +161,99 @@ def render_grouped_routes(groups, animated_keys=None, step_delay=0.0):
 
 ##Assume completely dark backdrop
 def route_mode():
-    groups = db_manager.get_route_groups()
-    if not groups:
-        print("Route mode: route map is empty, switching to LIVE mode")
-        db_manager.update_metadata(in_type=LIVE)
-        return
-    animated_keys = {g["group_key"] for g in groups}
-    render_grouped_routes(groups, animated_keys=animated_keys, step_delay=0.1)
+    """Route mode with time-aware rendering.
+    
+    Routes animate by showing stations sequentially based on their appear_at times.
+    Polls for active stations and re-renders each cycle.
+    """
 
+    print("Entering route mode...")
+    clear_all_leds()
+    rendered_stations = set()  # Track which stations we've shown before for animation
+    
+    while True:
+        # Check if mode has changed
+        meta = db_manager.get_metadata()
+        if meta.mode != ROUTE:
+            print("Route mode: mode changed externally, exiting")
+            break
+        
+        # Get all route groups
+        all_groups = db_manager.get_route_groups()
+        if not all_groups:
+            print("Route mode: route map is empty, switching to LIVE mode")
+            db_manager.update_metadata(in_type=LIVE)
+            break
+        
+        # Get only currently active routes (based on current time and appear_at)
+        now_ts = time.time()
+        active_groups = {}
+        newly_animated = set()
+        
+        for g in all_groups:
+            # Check which stations in this group should be visible now
+            active_indices = []
+            active_station_ids = []
+            
+            rows = db_manager.get_route_rows()
+            for route, index in rows:
+                # Match routes to groups by trip_id or route id
+                group_matches = (
+                    (route.source_trip_id == g.get("trip_id")) or
+                    (route.source_trip_id is None and g.get("group_key", "").startswith("route:"))
+                )
+                
+                if group_matches and route.appear_at <= now_ts < route.appear_at + route.lifetime:
+                    station_id = route.station_id
+                    # Track newly appearing stations for animation
+                    if station_id not in rendered_stations:
+                        newly_animated.add(station_id)
+                        rendered_stations.add(station_id)
+                    
+                    if 0 <= index < N_LEDS:
+                        active_indices.append(index)
+                    active_station_ids.append(station_id)
+            
+            if active_indices:
+                active_groups[g["group_key"]] = {
+                    "group_key": g["group_key"],
+                    "indices": active_indices,
+                    "color": g["color"],
+                }
+        
+        # Render active groups with animation for newly appeared stations
+        if active_groups:
+            clear_all_leds()
+            for group_key, g in active_groups.items():
+                color = hex_to_rgb(g["color"], COLOR_MAP["white"])
+                animate = group_key in newly_animated or not rendered_stations  # Animate new stations
+                for idx in g["indices"]:
+                    LEDS[idx] = color
+                    if animate:
+                        LEDS.show()
+                        time.sleep(0.05)
+            LEDS.show()
+        else:
+            # No active stations currently visible
+            clear_all_leds()
+
+        time.sleep(0.2)  # Poll for updates frequently
+    print("Exiting route mode...")
 
 def historic_mode():
-    """Historic playback loop using DB queue operations.
+    """Historic playback loop.
 
-    Startup:
-    1) clear existing historic rows
-    2) load N trips around metadata timestamp via load_trips()
-
-    Runtime:
-    - render active trips from route table
-    - when a mapped trip expires, remove_trip(source_trip_id)
-    - load one replacement trip to keep queue size stable
+    Uses datetime-based trip start scheduling with per-station offsets so each
+    trip grows from start to finish. When a trip ends, it is removed and a new
+    trip is loaded immediately.
     """
+    print("Entering historic mode...")
     meta = db_manager.get_metadata()
     seed_timestamp = meta.viewing_timestamp or datetime.now()
     seed_count = max(1, int(meta.num_trips or 1))
     playback_speed = max(1, int(meta.speed or 1))
     replacement_cursor = seed_timestamp
 
-    clear_all_leds()
     db_manager.clear_route(set_live=False)
     loaded = db_manager.load_trips(seed_timestamp, seed_count)
     if loaded == 0:
@@ -194,69 +261,121 @@ def historic_mode():
         db_manager.update_metadata(in_type=LIVE)
         return
 
-    rendered_groups = set()
+    trip_start_times = {}
+    rendered_station_keys = set()
 
     while True:
         meta = db_manager.get_metadata()
         if meta.mode != HISTORIC:
             print("Historic mode: mode changed externally, exiting")
-            return
+            print("Exiting historic mode...")
+            break
 
-        now_ts = time.time()
-        groups = db_manager.get_route_groups()
-        if not groups:
-            print("Historic mode: route queue empty, switching to LIVE")
-            db_manager.update_metadata(in_type=LIVE)
-            return
-
-        # Animate only newly loaded trips.
-        newly_rendered = set()
-        for g in groups:
-            group_key = g["group_key"]
-            if group_key in rendered_groups:
-                continue
-            newly_rendered.add(group_key)
-            rendered_groups.add(group_key)
-
-        if newly_rendered:
-            render_grouped_routes(groups, animated_keys=newly_rendered, step_delay=0.05)
-
-        expired_groups = [
-            g
-            for g in groups
-            if g.get("maps_to_trip")
-            and now_ts >= float(g["appear_at"]) + float(g["lifetime"])
+        rows = db_manager.get_route_rows()
+        historic_rows = [
+            (route, index) for route, index in rows if route.source_trip_id is not None
         ]
 
-        for g in expired_groups:
-            group_key = g["group_key"]
-            flash_indices = g["indices"]
-            flash_color = hex_to_rgb(g["color"], COLOR_MAP["white"])
+        if not historic_rows:
+            print("Historic mode: route queue empty, switching to LIVE")
+            db_manager.update_metadata(in_type=LIVE)
+            break
 
-            # Flash the ending trip before replacement.
-            for _ in range(3):
-                for idx in flash_indices:
-                    LEDS[idx] = flash_color
-                LEDS.show()
-                time.sleep(0.25)
-                for idx in flash_indices:
-                    LEDS[idx] = COLOR_MAP["blank"]
-                LEDS.show()
-                time.sleep(0.25)
+        # Build per-trip structure once per poll for performance.
+        trips = {}
+        for route, index in historic_rows:
+            trip_id = int(route.source_trip_id)
+            if trip_id not in trips:
+                trips[trip_id] = {
+                    "color": route.color,
+                    "lifetime": float(route.lifetime or 0.0),
+                    "min_appear": float(route.appear_at or 0.0),
+                    "rows": [],
+                }
+            trips[trip_id]["min_appear"] = min(
+                trips[trip_id]["min_appear"], float(route.appear_at or 0.0)
+            )
+            trips[trip_id]["lifetime"] = max(
+                trips[trip_id]["lifetime"], float(route.lifetime or 0.0)
+            )
+            trips[trip_id]["rows"].append((route, index))
 
-            db_manager.remove_trip(g.get("trip_id"))
-            rendered_groups.discard(group_key)
+        now_dt = datetime.now()
+        active_pixels = []
+        ended_trips = []
+        newly_visible = set()
+
+        for trip_id, trip in trips.items():
+            if trip_id not in trip_start_times:
+                trip_start_times[trip_id] = now_dt
+
+            elapsed = (now_dt - trip_start_times[trip_id]).total_seconds()
+            lifetime = max(0.0, trip["lifetime"])
+
+            if elapsed >= lifetime:
+                ended_trips.append((trip_id, trip))
+                continue
+
+            for route, index in sorted(
+                trip["rows"], key=lambda x: float(x[0].appear_at or 0.0)
+            ):
+                station_offset = float(route.appear_at or 0.0) - trip["min_appear"]
+                station_offset = max(0.0, station_offset)
+                if elapsed < station_offset:
+                    continue
+                if not (0 <= index < N_LEDS):
+                    continue
+
+                station_key = (trip_id, route.station_id)
+                if station_key not in rendered_station_keys:
+                    newly_visible.add(station_key)
+                    rendered_station_keys.add(station_key)
+
+                active_pixels.append((
+                    index,
+                    hex_to_rgb(trip["color"], COLOR_MAP["white"]),
+                    station_key,
+                ))
+
+        clear_all_leds()
+        for index, color, station_key in active_pixels:
+            LEDS[index] = color
+            if station_key in newly_visible:
+                LEDS.show()
+                time.sleep(0.01)
+        LEDS.show()
+
+        for trip_id, trip in ended_trips:
+            flash_indices = []
+            for route, index in trip["rows"]:
+                if 0 <= index < N_LEDS:
+                    flash_indices.append(index)
+
+            if flash_indices:
+                flash_color = hex_to_rgb(trip["color"], COLOR_MAP["white"])
+                for _ in range(3):
+                    for idx in flash_indices:
+                        LEDS[idx] = flash_color
+                    LEDS.show()
+                    time.sleep(0.15)
+                    for idx in flash_indices:
+                        LEDS[idx] = COLOR_MAP["blank"]
+                    LEDS.show()
+                    time.sleep(0.15)
+
+            db_manager.remove_trip(trip_id)
+            trip_start_times.pop(trip_id, None)
+            rendered_station_keys = {
+                key for key in rendered_station_keys if key[0] != trip_id
+            }
 
             replacement_cursor = replacement_cursor + timedelta(
-                seconds=max(1.0, float(g["lifetime"]) * playback_speed)
+                seconds=max(1.0, max(0.0, trip["lifetime"]) * playback_speed)
             )
             db_manager.load_trips(replacement_cursor, 1)
 
-        if expired_groups:
-            groups = db_manager.get_route_groups()
-            render_grouped_routes(groups)
-
-        time.sleep(0.5)
+        time.sleep(0.1)
+    print("Exiting historic mode...")
 
 
 def clear_all_leds():

@@ -25,8 +25,8 @@ def migrate_schema(db_manager):
     try:
         with db_manager.engine.begin() as conn:
             # Enable PostGIS extension
-            conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
-            conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis_topology"))
+            # conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
+            # conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis_topology"))
 
             # Add geom column and spatial index
             conn.execute(
