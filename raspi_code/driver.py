@@ -157,7 +157,7 @@ def live_mode(current_state):
 # Appear at is the raw seconds it should take to appear relative to start.
 # As such, we can just multiply the render time by start to get the appear_at time.
 
-HISTORIC_LINGER_SECONDS = 5
+HISTORIC_LINGER_SECONDS = 1.5
 FADE_DURATION_SECONDS = 0.1
 
 
@@ -214,6 +214,14 @@ def render_visible_instant(route_stations, trip_time):
     LEDS.show()
     print(f"[RESTORE] Instantly rendered {visible_count} visible stations at trip_time={trip_time:.2f}s")
     return next_index
+
+
+def _next_render_index(route_stations, trip_time):
+    """Return the first index whose row should render in the future."""
+    for idx, station in enumerate(route_stations):
+        if _render_at(station) > trip_time:
+            return idx
+    return len(route_stations)
 
 
 def fade_leds(led_updates, speed=FADE_DURATION_SECONDS, steps=5):
@@ -352,7 +360,7 @@ def historic_mode(meta):
     frame_count = 0
     last_print_time = 0
     last_meta_check_time = 0.0
-    meta_check_interval = 1
+    meta_check_interval = 0.25
     fading_trips = {}
 
     while True:
@@ -444,29 +452,28 @@ def historic_mode(meta):
 
         completed_trips = _apply_historic_fades(fading_trips, trip_time)
         if not completed_trips:
-            time.sleep(0.01)
+            time.sleep(0.005)
             continue
 
-        ended_trip_id = completed_trips[0]
-        ended_state = trip_state.get(ended_trip_id)
-        fading_trips.pop(ended_trip_id, None)
-        if ended_state is None:
-            time.sleep(0.01)
-            continue
+        for ended_trip_id in completed_trips:
+            ended_state = trip_state.get(ended_trip_id)
+            fading_trips.pop(ended_trip_id, None)
+            if ended_state is None:
+                continue
 
-        print(f"[HISTORIC_MODE] Trip {ended_trip_id} fade complete at {trip_time:.2f}s. Removing and loading replacement...")
-        db_manager.remove_trip(ended_trip_id)
+            print(f"[HISTORIC_MODE] Trip {ended_trip_id} fade complete at {trip_time:.2f}s. Removing and loading replacement...")
+            db_manager.remove_trip(ended_trip_id)
 
-        replacement_start = ended_state["complete_at"] + linger_virtual
-        replacement_timestamp = (
-            base_viewing_timestamp + timedelta(seconds=replacement_start)
-        )
-        print(f"[HISTORIC_MODE] Loading replacement trip at timestamp {replacement_timestamp}...")
-        db_manager.load_trips(
-            replacement_timestamp,
-            1,
-            start_at_seconds=replacement_start,
-        )
+            replacement_start = ended_state["complete_at"] + linger_virtual
+            replacement_timestamp = (
+                base_viewing_timestamp + timedelta(seconds=replacement_start)
+            )
+            print(f"[HISTORIC_MODE] Loading replacement trip at timestamp {replacement_timestamp}...")
+            db_manager.load_trips(
+                replacement_timestamp,
+                1,
+                start_at_seconds=replacement_start,
+            )
 
         refreshed_meta = db_manager.get_metadata()
         if refreshed_meta.mode != HISTORIC:
@@ -491,9 +498,9 @@ def historic_mode(meta):
         }
 
         print(f"[HISTORIC_MODE] Refreshed snapshot: {len(stations)} stations, instantaneously rendering...")
-        # After DB refresh, restore current visible state instantly and only fade
-        # genuinely new stations from this point onward.
-        cur_indx = render_visible_instant(stations, trip_time)
+        # Do not clear and redraw everything here; that causes visible flashing.
+        # Keep current LED state and only continue with future route rows.
+        cur_indx = _next_render_index(stations, trip_time)
         _apply_historic_fades(fading_trips, trip_time)
 
 

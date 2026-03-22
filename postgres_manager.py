@@ -9,6 +9,8 @@ see db_helpers.py instead.
 import requests
 import time
 from datetime import datetime, timedelta
+import googlemaps
+import polyline
 from sqlalchemy import create_engine, ForeignKey, Index, select, func, cast
 from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.orm import (
@@ -25,6 +27,7 @@ from sqlalchemy import URL
 from sqlalchemy.orm import sessionmaker, relationship, DeclarativeBase
 from geoalchemy2 import Geometry, Geography
 from globals import *
+from api_keys import GOOGLE_MAPS
 import time
 
 
@@ -174,7 +177,58 @@ class DBManager:
         )
         self.engine = create_engine(self.database_url, echo=False)
         self.Session_eng = sessionmaker(bind=self.engine)
+        self._gmaps_client = None
         print(f"Connected to PostgreSQL at {host}:{port}/{dbname}")
+
+    def _get_gmaps_client(self):
+        """Lazy-init Google Maps client so DBManager remains lightweight."""
+        if self._gmaps_client is not None:
+            return self._gmaps_client
+        try:
+            self._gmaps_client = googlemaps.Client(key=GOOGLE_MAPS)
+        except Exception as exc:
+            print(f"[GMAPS] Failed to initialize client: {exc}")
+            self._gmaps_client = None
+        return self._gmaps_client
+
+    def _fetch_trip_gmaps_path(self, trip):
+        """Return [lat, lon] path for one trip from Google Maps, or [] on failure."""
+        client = self._get_gmaps_client()
+        if client is None:
+            return []
+
+        try:
+            origin = (trip["start_lat"], trip["start_lon"])
+            destination = (trip["end_lat"], trip["end_lon"])
+            directions = client.directions(
+                origin=origin,
+                destination=destination,
+                mode="bicycling",
+                alternatives=False,
+            )
+            if not directions:
+                return []
+
+            encoded_polyline = directions[0]["overview_polyline"]["points"]
+            decoded_coords = polyline.decode(encoded_polyline)
+            return [[lat, lon] for lat, lon in decoded_coords]
+        except Exception as exc:
+            trip_id = trip.get("trip_id")
+            print(f"[GMAPS] Failed to fetch path for trip {trip_id}: {exc}")
+            return []
+
+    def _enrich_trips_with_paths(self, trips):
+        """Attach Google Maps path to trip dicts when available."""
+        if not trips:
+            return trips
+
+        for trip in trips:
+            if trip.get("path"):
+                continue
+            path = self._fetch_trip_gmaps_path(trip)
+            if path and len(path) >= 2:
+                trip["path"] = path
+        return trips
 
     def is_update(self, prev_timestamp):
         """Check if there are any station updates since the given timestamp"""
@@ -488,6 +542,37 @@ class DBManager:
         )
         return [station_id for station_id, _ in rows]
 
+    def _get_station_ids_on_polyline_session(self, session, path, threshold_meters):
+        """Get station IDs along an explicit polyline path sorted by path position."""
+        if not path or len(path) < 2:
+            return []
+
+        line_points = [
+            func.ST_SetSRID(func.ST_MakePoint(lon, lat), 4326)
+            for lat, lon in path
+        ]
+        linestring_geom = func.ST_SetSRID(
+            func.ST_MakeLine(array(line_points)),
+            4326,
+        )
+        linestring_geog = cast(linestring_geom, Geography)
+        locate_expr = func.ST_LineLocatePoint(linestring_geom, Station.geom)
+
+        rows = (
+            session.query(Station.station_id, locate_expr.label("path_pos"))
+            .filter(
+                Station.geom.isnot(None),
+                func.ST_DWithin(
+                    cast(Station.geom, Geography),
+                    linestring_geog,
+                    threshold_meters,
+                ),
+            )
+            .order_by(locate_expr)
+            .all()
+        )
+        return [station_id for station_id, _ in rows]
+
     def _get_path_station_ids(self, trip):
         with self.Session_eng() as session:
             return self._get_path_station_ids_session(session, trip)
@@ -576,7 +661,15 @@ class DBManager:
             if trip["trip_id"] in existing_trip_ids:
                 continue
 
-            station_ids = self._get_path_station_ids_session(session, trip)
+            path = trip.get("path")
+            if path and len(path) >= 2:
+                station_ids = self._get_station_ids_on_polyline_session(
+                    session,
+                    path,
+                    HISTORIC_STATION_THRESHOLD,
+                )
+            else:
+                station_ids = self._get_path_station_ids_session(session, trip)
             if not station_ids:
                 continue
 
@@ -667,6 +760,7 @@ class DBManager:
                 timestamp,
                 target_count,
             )
+            candidate_trips = self._enrich_trips_with_paths(candidate_trips)
             loaded, inserted_rows = self._insert_historic_trip_rows(
                 session,
                 candidate_trips,
@@ -728,6 +822,7 @@ class DBManager:
                     replacement_timestamp,
                     1,
                 )
+                candidates = self._enrich_trips_with_paths(candidates)
                 self._insert_historic_trip_rows(
                     session,
                     candidates,
