@@ -190,6 +190,9 @@ def _historic_snapshot():
         idx = row.get("index", -1)
         if 0 <= idx < N_LEDS:
             entry["indices"].add(idx)
+    print(f"[SNAPSHOT] Loaded {len(stations)} stations across {len(trip_state)} trips")
+    for trip_id, state in trip_state.items():
+        print(f"  Trip {trip_id}: {len(state['indices'])} LEDs, completes at {state['complete_at']:.2f}s")
     return stations, trip_state
 
 
@@ -197,6 +200,7 @@ def render_visible_instant(route_stations, trip_time):
     """Render all currently visible route rows immediately (no fade)."""
     clear_all_leds()
     next_index = 0
+    visible_count = 0
     for idx, station in enumerate(route_stations):
         if _render_at(station) > trip_time:
             next_index = idx
@@ -204,8 +208,10 @@ def render_visible_instant(route_stations, trip_time):
         led_index = station.get("index", -1)
         if 0 <= led_index < N_LEDS:
             LEDS[led_index] = hex_to_rgb(station["color"])
+            visible_count += 1
         next_index = idx + 1
     LEDS.show()
+    print(f"[RESTORE] Instantly rendered {visible_count} visible stations at trip_time={trip_time:.2f}s")
     return next_index
 
 
@@ -216,6 +222,7 @@ def fade_leds(led_updates, speed=FADE_DURATION_SECONDS, steps=5):
 
     steps = max(1, int(steps))
     step_delay = max(0.0, float(speed)) / steps
+    print(f"[FADE] Starting fade for {len(led_updates)} LEDs over {speed:.3f}s in {steps} steps")
 
     start_colors = {}
     for index, _ in led_updates:
@@ -246,6 +253,7 @@ def fade_leds(led_updates, speed=FADE_DURATION_SECONDS, steps=5):
 def render_routes(route_stations, trip_time, cur_indx, fade_speed=FADE_DURATION_SECONDS):
     # Assume route stations is ordered by render time
     led_updates = []
+    initial_indx = cur_indx
     while cur_indx < len(route_stations) and _render_at(route_stations[cur_indx]) <= trip_time:
         station = route_stations[cur_indx]
         index = station["index"]
@@ -257,6 +265,7 @@ def render_routes(route_stations, trip_time, cur_indx, fade_speed=FADE_DURATION_
         cur_indx += 1
 
     if led_updates:
+        print(f"[RENDER] trip_time={trip_time:.2f}s: fading {len(led_updates)} new LEDs (indices {initial_indx}-{cur_indx})")
         fade_leds(led_updates, speed=fade_speed)
     return cur_indx
 
@@ -265,18 +274,26 @@ def route_mode(meta):
     speed = meta.speed or 30
     # Assume get_route_rows returns stations ordered by appear_at time
     stations = db_manager.get_route_rows()
+    print(f"[ROUTE_MODE] Starting with {len(stations)} stations, speed={speed}x")
     clear_all_leds()
     start_time = time.time()
     cur_indx = 0
+    last_print_time = 0
     while cur_indx < len(stations):
         now = time.time()
         trip_time = (now - start_time) * (speed)
         cur_indx = render_routes(stations, trip_time, cur_indx)
-    # Keep the final route displayed for 10 seconds after completion
+        # Debug print every 2 seconds of real time
+        if now - last_print_time > 2:
+            print(f"[ROUTE_MODE] Progress: {cur_indx}/{len(stations)} stations ({100*cur_indx/len(stations):.1f}%), trip_time={trip_time:.2f}s")
+            last_print_time = now
+    print(f"[ROUTE_MODE] Complete! All {len(stations)} stations rendered. Lingering for 5s...")
+    # Keep the final route displayed for 5 seconds after completion
     time.sleep(5)
 
 
 def historic_mode(meta):
+    print(f"[HISTORIC_MODE] Initializing with speed={meta.speed}x, viewing_timestamp={meta.viewing_timestamp}")
     speed = meta.speed or 30
     base_viewing_timestamp = meta.viewing_timestamp or datetime.now()
     start_time = time.time()
@@ -284,16 +301,27 @@ def historic_mode(meta):
 
     stations, trip_state = _historic_snapshot()
     if not stations:
+        print("[HISTORIC_MODE] ERROR: No stations loaded from snapshot. Clearing and exiting.")
         clear_all_leds()
         return
 
+    print(f"[HISTORIC_MODE] Initial snapshot ready: {len(stations)} stations, linger_virtual={linger_virtual:.2f}s")
     clear_all_leds()
     cur_indx = 0
+    frame_count = 0
+    last_print_time = 0
 
     while True:
         now = time.time()
         trip_time = (now - start_time) * speed
         cur_indx = render_routes(stations, trip_time, cur_indx)
+        frame_count += 1
+
+        # Debug print every 3 seconds of real time
+        if now - last_print_time > 3:
+            active_trips = len(trip_state)
+            print(f"[HISTORIC_MODE] Frame {frame_count}, trip_time={trip_time:.2f}s, {active_trips} active trips, cur_indx={cur_indx}")
+            last_print_time = now
 
         ended_trip_id = None
         ended_state = None
@@ -307,12 +335,14 @@ def historic_mode(meta):
             time.sleep(0.01)
             continue
 
+        print(f"[HISTORIC_MODE] Trip {ended_trip_id} complete at {trip_time:.2f}s. Removing and loading replacement...")
         db_manager.remove_trip(ended_trip_id)
 
         replacement_start = ended_state["complete_at"] + linger_virtual
         replacement_timestamp = (
             base_viewing_timestamp + timedelta(seconds=replacement_start)
         )
+        print(f"[HISTORIC_MODE] Loading replacement trip at timestamp {replacement_timestamp}...")
         db_manager.load_trips(
             replacement_timestamp,
             1,
@@ -321,15 +351,19 @@ def historic_mode(meta):
 
         refreshed_meta = db_manager.get_metadata()
         if refreshed_meta.mode != HISTORIC:
+            print(f"[HISTORIC_MODE] Mode changed to {refreshed_meta.mode}. Exiting historic mode.")
             break
         speed = refreshed_meta.speed or speed
         linger_virtual = HISTORIC_LINGER_SECONDS * speed
+        print(f"[HISTORIC_MODE] Updated speed={speed}x, linger_virtual={linger_virtual:.2f}s")
 
         stations, trip_state = _historic_snapshot()
         if not stations:
+            print("[HISTORIC_MODE] ERROR: No stations in refreshed snapshot. Clearing and exiting.")
             clear_all_leds()
             break
 
+        print(f"[HISTORIC_MODE] Refreshed snapshot: {len(stations)} stations, instantaneously rendering...")
         # After DB refresh, restore current visible state instantly and only fade
         # genuinely new stations from this point onward.
         cur_indx = render_visible_instant(stations, trip_time)
