@@ -1,11 +1,4 @@
-###
-# Pi specific imports
-PI = False
-if PI:
-    import board
-    import neopixel
 
-##
 import csv
 from datetime import datetime, timedelta
 import time
@@ -13,6 +6,9 @@ from postgres_manager import DBManager
 from globals import *
 
 if PI:
+    import board
+    import neopixel
+
     LEDS = neopixel.NeoPixel(board.D18, N_LEDS, brightness=0.1, auto_write=False)
 else:
 
