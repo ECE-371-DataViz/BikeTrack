@@ -246,14 +246,20 @@ if __name__ == "__main__":
             mode = meta.mode
             clear_all_leds()
         if mode == HISTORIC:
-            historic_mode(meta)
+            try:
+                historic_mode(meta)
+            except Exception as e:
+                print("Error in historic mode:", e)
             continue
         elif mode == LIVE:
             station_states = live_mode(station_states)
             time_dormant = max(0, UPDATE_RATE - (time.time() - s_time))
             time.sleep(time_dormant)
         elif mode == ROUTE:
-            route_mode(meta)
+            try:
+                route_mode(meta)
+            except Exception as e:
+                print("Error in route mode:", e)
             continue
     # except Exception as e:
     #     print("Error in main loop: Changing system behavior to live mode", e)
