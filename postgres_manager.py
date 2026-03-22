@@ -248,6 +248,47 @@ class DBManager:
             session.close()
         return meta
 
+    def update_historic_runtime_settings(
+        self,
+        speed=None,
+        viewing_timestamp=None,
+        num_trips=None,
+    ):
+        """Update historic runtime settings and bump last_updated only on real changes.
+
+        This is intended for live UI tweaks while mode is already HISTORIC so the
+        driver can detect config updates without mode transitions.
+        """
+        with self.Session_eng() as session:
+            meta = session.get(AppMetadata, 1)
+            if meta is None or meta.mode != HISTORIC:
+                return False
+
+            changed = False
+
+            if speed is not None:
+                speed_int = int(speed)
+                if int(meta.speed or 0) != speed_int:
+                    meta.speed = speed_int
+                    changed = True
+
+            if viewing_timestamp is not None and meta.viewing_timestamp != viewing_timestamp:
+                meta.viewing_timestamp = viewing_timestamp
+                changed = True
+
+            if num_trips is not None:
+                num_trips_int = int(num_trips)
+                if int(meta.num_trips or 0) != num_trips_int:
+                    meta.num_trips = num_trips_int
+                    changed = True
+
+            if not changed:
+                return False
+
+            meta.last_updated = datetime.now()
+            session.commit()
+            return True
+
     def get_station(self, station_id):
         """Get a single station with current data"""
         with self.Session_eng() as session:

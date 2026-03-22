@@ -334,6 +334,9 @@ def historic_mode(meta):
     print(f"[HISTORIC_MODE] Initializing with speed={meta.speed}x, viewing_timestamp={meta.viewing_timestamp}")
     speed = meta.speed or 30
     base_viewing_timestamp = meta.viewing_timestamp or datetime.now()
+    tracked_viewing_timestamp = meta.viewing_timestamp
+    tracked_num_trips = meta.num_trips
+    tracked_last_updated = meta.last_updated
     start_time = time.time()
     linger_virtual = HISTORIC_LINGER_SECONDS * speed
 
@@ -348,11 +351,64 @@ def historic_mode(meta):
     cur_indx = 0
     frame_count = 0
     last_print_time = 0
+    last_meta_check_time = 0.0
+    meta_check_interval = 1
     fading_trips = {}
 
     while True:
         now = time.time()
         trip_time = (now - start_time) * speed
+
+        if now - last_meta_check_time >= meta_check_interval:
+            refreshed_meta = db_manager.get_metadata()
+            last_meta_check_time = now
+
+            if refreshed_meta.mode != HISTORIC:
+                print(f"[HISTORIC_MODE] Mode changed to {refreshed_meta.mode}. Exiting historic mode.")
+                break
+
+            refreshed_last_updated = refreshed_meta.last_updated
+            tracked_last_updated_safe = tracked_last_updated or datetime.min
+            if refreshed_last_updated and refreshed_last_updated > tracked_last_updated_safe:
+                prev_speed = speed
+                speed = refreshed_meta.speed or speed
+                linger_virtual = HISTORIC_LINGER_SECONDS * speed
+
+                should_reset = (
+                    refreshed_meta.viewing_timestamp != tracked_viewing_timestamp
+                    or refreshed_meta.num_trips != tracked_num_trips
+                )
+
+                tracked_last_updated = refreshed_last_updated
+                tracked_viewing_timestamp = refreshed_meta.viewing_timestamp
+                tracked_num_trips = refreshed_meta.num_trips
+
+                if should_reset:
+                    base_viewing_timestamp = refreshed_meta.viewing_timestamp or datetime.now()
+                    start_time = now
+                    trip_time = 0.0
+                    fading_trips = {}
+
+                    stations, trip_state = _historic_snapshot()
+                    if not stations:
+                        print("[HISTORIC_MODE] ERROR: No stations after metadata reset. Clearing and exiting.")
+                        clear_all_leds()
+                        break
+
+                    clear_all_leds(show=False)
+                    cur_indx = render_visible_instant(stations, trip_time)
+                    print(
+                        "[HISTORIC_MODE] Metadata changed during playback. "
+                        "Reset timeline and refreshed snapshot."
+                    )
+                    continue
+
+                if speed != prev_speed:
+                    print(
+                        f"[HISTORIC_MODE] Playback speed changed to {speed}x "
+                        f"(linger_virtual={linger_virtual:.2f}s)."
+                    )
+
         cur_indx = render_routes(stations, trip_time, cur_indx)
         frame_count += 1
 
@@ -417,6 +473,9 @@ def historic_mode(meta):
             print(f"[HISTORIC_MODE] Mode changed to {refreshed_meta.mode}. Exiting historic mode.")
             break
         speed = refreshed_meta.speed or speed
+        tracked_last_updated = refreshed_meta.last_updated
+        tracked_viewing_timestamp = refreshed_meta.viewing_timestamp
+        tracked_num_trips = refreshed_meta.num_trips
         linger_virtual = HISTORIC_LINGER_SECONDS * speed
         print(f"[HISTORIC_MODE] Updated speed={speed}x, linger_virtual={linger_virtual:.2f}s")
 

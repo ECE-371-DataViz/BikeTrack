@@ -644,6 +644,23 @@ def shuffle_historic_trips():
     load_historic_trip_sample(keep_playing=True)
 
 
+def on_historic_settings_changed():
+    """While historic playback is active, publish setting changes to metadata."""
+    if not st.session_state.get("historic_playing"):
+        return
+
+    db = get_db_manager()
+    start_dt = datetime.combine(
+        st.session_state["hist_date"],
+        st.session_state["hist_time"],
+    )
+    db.update_historic_runtime_settings(
+        speed=st.session_state["hist_speed"],
+        viewing_timestamp=start_dt,
+        num_trips=min(st.session_state["hist_num_trips"], 20),
+    )
+
+
 def stop_historic_playback():
     """Callback: stop playback by setting mode back to LIVE and clearing historic queue."""
     st.session_state["historic_playing"] = False
@@ -794,11 +811,13 @@ def main():
             "Start Date",
             value=datetime(2025, 9, 15).date(),
             key="hist_date",
+            on_change=on_historic_settings_changed,
         )
         st.sidebar.time_input(
             "Start Time",
             value=datetime(2025, 9, 15, 8, 0).time(),
             key="hist_time",
+            on_change=on_historic_settings_changed,
         )
         st.sidebar.slider(
             "Playback Speed (x real-time)",
@@ -807,6 +826,7 @@ def main():
             value=100,
             step=10,
             key="hist_speed",
+            on_change=on_historic_settings_changed,
         )
         st.sidebar.number_input(
             "Number of Trips",
@@ -815,6 +835,7 @@ def main():
             value=10,
             step=1,
             key="hist_num_trips",
+            on_change=on_historic_settings_changed,
         )
         if not st.session_state.get("historic_playing"):
             st.sidebar.button(
