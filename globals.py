@@ -4,7 +4,7 @@ If you prefer, replace the values here with environment variables or a .env file
 """
 
 # Database connection settings
-DB_HOST = "localhost"
+DB_HOST = "100.64.0.3"
 DB_PORT = 5432
 DB_NAME = "biketrack_db"
 DB_USER = "biketracker"
@@ -41,6 +41,7 @@ N_LEDS = 665
 S3_BUCKET_URL = "https://s3.amazonaws.com/tripdata"
 S3_NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
 INFO_URL = "https://gbfs.lyft.com/gbfs/2.3/bkn/en/station_information.json"
+STATION_STATUS_URL = "https://gbfs.lyft.com/gbfs/2.3/bkn/en/station_status.json"
 
 # Distinct colors for historic trip rendering (up to 20 concurrent trips)
 HISTORIC_STATION_THRESHOLD = 200  # meters

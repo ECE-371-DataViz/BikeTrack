@@ -408,7 +408,6 @@ def _parse_trip_chunk(chunk, valid_short_names):
 
     Returns a dataframe with columns: started_at, ended_at, start_station_id,
     end_station_id, rideable_type (ready for pd.to_sql insertion).
-
     Args:
         chunk: DataFrame loaded from CSV
         valid_short_names: Set of valid station short names to filter by
@@ -428,5 +427,9 @@ def _parse_trip_chunk(chunk, valid_short_names):
         "end_station_id"
     ].isin(valid_short_names)
     chunk = chunk[station_mask]
+
+    # Exclude short/invalid trips during ingestion: keep trips >= 5 minutes only.
+    duration_seconds = (chunk["ended_at"] - chunk["started_at"]).dt.total_seconds()
+    chunk = chunk[duration_seconds >= 5 * 60]
 
     return chunk

@@ -885,24 +885,14 @@ class DBManager:
 
 
 if __name__ == "__main__":
-    # For one-time setup tasks, use db_helpers:
-    # - migrate_schema() for schema migrations
-    # - initial_load() for creating tables and loading initial data
-    # - download_trip_data() for loading S3 trip data
-
-    from db_helpers import migrate_schema
-
+    # For one-time setup tasks, use db_helpers
     manager = DBManager(DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD)
-    # Uncomment to run migrations: migrate_schema(manager)
-    # Uncomment to do initial setup: db_helpers.initial_load(manager)
 
     manager.update_metadata(in_type=LIVE)
     last_s3 = datetime.now()
-    station_status_url = "https://gbfs.lyft.com/gbfs/2.3/bkn/en/station_status.json"
-
     while True:
         try:
-            num_updated = manager.update_stations(url=station_status_url)
+            num_updated = manager.update_stations(url=STATION_STATUS_URL)
             print(
                 f'Updated {num_updated} stations at {datetime.now().strftime("%H:%M:%S")}'
             )
