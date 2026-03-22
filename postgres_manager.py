@@ -515,7 +515,10 @@ class DBManager:
         target_count,
         trip_start_at,
     ):
-        """Insert up to target_count historic trips and return inserted count."""
+        """Insert up to target_count historic trips and return (count, inserted_rows).
+        
+        inserted_rows is a list of dicts in renderer format for each newly inserted row.
+        """
         existing_trip_ids = {
             row[0]
             for row in session.query(Route.source_trip_id)
@@ -523,6 +526,7 @@ class DBManager:
             .all()
         }
         loaded = 0
+        inserted_rows = []
         color_cycle = HISTORIC_COLORS if HISTORIC_COLORS else ["#FFFFFF"]
 
         for trip in candidate_trips:
@@ -567,22 +571,32 @@ class DBManager:
                 elif station_id == end_station_id:
                     station_color = end_color
 
-                session.add(
-                    Route(
-                        station_id=station_id,
-                        station_index=station_idx_map.get(station_id, -1),
-                        color=station_color,
-                        appear_at=appear_at,
-                        lifetime=lifetime,
-                        source_trip_id=trip["trip_id"],
-                        trip_start_at=float(trip_start_at),
-                    )
+                route_obj = Route(
+                    station_id=station_id,
+                    station_index=station_idx_map.get(station_id, -1),
+                    color=station_color,
+                    appear_at=appear_at,
+                    lifetime=lifetime,
+                    source_trip_id=trip["trip_id"],
+                    trip_start_at=float(trip_start_at),
                 )
+                session.add(route_obj)
+                # Track inserted row in renderer format
+                inserted_rows.append({
+                    "id": None,  # Will be assigned by DB on commit
+                    "station_id": station_id,
+                    "index": station_idx_map.get(station_id, -1),
+                    "color": station_color,
+                    "appear_at": appear_at,
+                    "lifetime": lifetime,
+                    "source_trip_id": trip["trip_id"],
+                    "trip_start_at": float(trip_start_at),
+                })
 
             existing_trip_ids.add(trip["trip_id"])
             loaded += 1
 
-        return loaded
+        return loaded, inserted_rows
 
     def clear_route(self, set_live=True):
         """Clear all active route rows."""
@@ -593,13 +607,16 @@ class DBManager:
             session.commit()
 
     def load_trips(self, timestamp, N_trips, start_at_seconds=0.0):
-        """Queue N historic trips around a timestamp into the route table."""
+        """Queue N historic trips around a timestamp into the route table.
+        
+        Returns (count, inserted_rows) where inserted_rows is a list of dicts in renderer format.
+        """
         if timestamp is None:
-            return 0
+            return 0, []
 
         target_count = max(0, int(N_trips or 0))
         if target_count == 0:
-            return 0
+            return 0, []
 
         with self.Session_eng() as session:
             meta = session.get(AppMetadata, 1)
@@ -609,7 +626,7 @@ class DBManager:
                 timestamp,
                 target_count,
             )
-            loaded = self._insert_historic_trip_rows(
+            loaded, inserted_rows = self._insert_historic_trip_rows(
                 session,
                 candidate_trips,
                 target_count,
@@ -626,7 +643,7 @@ class DBManager:
                     ),
                 )
             session.commit()
-            return loaded
+            return loaded, inserted_rows
 
     def historic_tick(self, base_viewing_timestamp, trip_time, linger_seconds=5.0):
         """Single historic queue/update call for remote DB efficiency.

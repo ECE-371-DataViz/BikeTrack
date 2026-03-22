@@ -34,11 +34,12 @@ else:
 db_manager = DBManager(DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD)
 
 
-def clear_all_leds():
+def clear_all_leds(show=True):
     """Clear all LEDs to black"""
     # print("Clearing all LEDs...")
     LEDS.fill(COLOR_MAP["blank"])
-    LEDS.show()
+    if show:
+        LEDS.show()
 
 
 def load_logo(csv_path, led_array):
@@ -198,7 +199,7 @@ def _historic_snapshot():
 
 def render_visible_instant(route_stations, trip_time):
     """Render all currently visible route rows immediately (no fade)."""
-    clear_all_leds()
+    clear_all_leds(show=False)
     next_index = 0
     visible_count = 0
     for idx, station in enumerate(route_stations):
