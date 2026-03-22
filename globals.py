@@ -2,7 +2,7 @@
 API keys extracted from the original project.
 If you prefer, replace the values here with environment variables or a .env file.
 """
-
+PI = False
 # Database connection settings
 DB_HOST = "100.64.0.3"
 DB_PORT = 5432

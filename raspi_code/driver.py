@@ -403,6 +403,7 @@ if __name__ == "__main__":
     mode = db_state.mode
 
     station_states = db_manager.get_all_station_status()
+
     while True:
         # try:
         s_time = time.time()
