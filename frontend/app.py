@@ -744,6 +744,16 @@ def main():
             key="station_threshold_slider",
         )
 
+        route_speed = st.sidebar.slider(
+            "Route Playback Speed (x real-time)",
+            min_value=1,
+            max_value=200,
+            value=15,
+            step=1,
+            on_change=reset_run_keep_points,
+            key="route_speed_slider",
+        )
+
         # Find Routes button in sidebar
         st.sidebar.button(
             "🗺️ Find Routes",
@@ -864,8 +874,18 @@ def main():
                         {"station_id": sid, "color": color}
                         for sid, color in route_dict.items()
                     ]
+                    route_durations = [
+                        float(feature.get("properties", {}).get("duration", 0) or 0)
+                        for feature in features
+                    ]
+                    trip_time_seconds = max(route_durations) if route_durations else 5.0
                     db_manager.clear_route()
-                    db_manager.set_route_stations(route_list)
+                    db_manager.set_route_stations(
+                        route_list,
+                        trip_time=trip_time_seconds,
+                        speed=route_speed,
+                    )
+                    db_manager.update_metadata(in_type=ROUTE, speed=route_speed)
                     st.session_state["route_written"] = True
 
                 # Render routes on map

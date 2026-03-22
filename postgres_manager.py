@@ -322,7 +322,9 @@ class DBManager:
         
         with self.Session_eng() as session:
             session.query(Route).delete()
-            animation_duration = max(float(trip_time or 0), 1.0)
+            speed_value = max(float(speed or 1), 1.0)
+            # Route mode timeline is real trip duration scaled by playback speed.
+            animation_duration = max(float(trip_time or 0) / speed_value, 1.0)
             sorted_stations = self.sort_stations_by_distance(session, route_stations)
             station_idx_map = self._station_index_map(
                 session,
@@ -348,7 +350,7 @@ class DBManager:
                     trip_start_at=0.0,
                 )
                 session.add(route)
-            self.update_metadata(session, in_type=ROUTE)
+            self.update_metadata(session, in_type=ROUTE, speed=int(speed_value))
             session.commit()
         print(f"✓ Stored {len(route_stations)} route stations in PostgreSQL with sequential animation")
 
@@ -521,8 +523,7 @@ class DBManager:
             .all()
         }
         loaded = 0
-        color_cycle = HISTORIC_COLORS
-        color_seed = len(existing_trip_ids)
+        color_cycle = HISTORIC_COLORS if HISTORIC_COLORS else ["#FFFFFF"]
 
         for trip in candidate_trips:
             if loaded >= target_count:
@@ -534,8 +535,22 @@ class DBManager:
             if not station_ids:
                 continue
 
+            start_station_id = str(trip.get("start_station_id") or "")
+            end_station_id = str(trip.get("end_station_id") or "")
+            rideable_type = str(trip.get("rideable_type") or "").lower()
+            start_color = "#00FF00" if ("ebike" in rideable_type or "electric" in rideable_type) else "#0000FF"
+            end_color = "#FF0000"
+
+            # Ensure route endpoints are always present in the rendered path.
+            if start_station_id and start_station_id not in station_ids:
+                station_ids = [start_station_id] + station_ids
+            if end_station_id and end_station_id not in station_ids:
+                station_ids = station_ids + [end_station_id]
+
             station_idx_map = self._station_index_map(session, station_ids)
-            color = color_cycle[(color_seed + loaded) % len(color_cycle)]
+            # Stable per-trip color selection avoids replacement cycles collapsing
+            # to the same color when active trip count stays constant.
+            color = color_cycle[int(trip["trip_id"]) % len(color_cycle)]
             lifetime = max(float(trip["duration_seconds"]), 1.0)
             num_stations = len(station_ids)
 
@@ -546,11 +561,17 @@ class DBManager:
                     else 0.0
                 )
 
+                station_color = color
+                if station_id == start_station_id:
+                    station_color = start_color
+                elif station_id == end_station_id:
+                    station_color = end_color
+
                 session.add(
                     Route(
                         station_id=station_id,
                         station_index=station_idx_map.get(station_id, -1),
-                        color=color,
+                        color=station_color,
                         appear_at=appear_at,
                         lifetime=lifetime,
                         source_trip_id=trip["trip_id"],
@@ -724,10 +745,22 @@ class DBManager:
                 if not stations_info:
                     continue
                 station_ids = [s["station_id"] for s in stations_info]
+
+                start_station_id = str(trip.get("start_station_id") or "")
+                end_station_id = str(trip.get("end_station_id") or "")
+                rideable_type = str(trip.get("rideable_type") or "").lower()
+                start_color = "#00FF00" if ("ebike" in rideable_type or "electric" in rideable_type) else "#0000FF"
+                end_color = "#FF0000"
+
+                if start_station_id and start_station_id not in station_ids:
+                    station_ids = [start_station_id] + station_ids
+                if end_station_id and end_station_id not in station_ids:
+                    station_ids = station_ids + [end_station_id]
+
                 station_idx_map = self._station_index_map(session, station_ids)
                 
                 # Assign highly distinct colors before repeating.
-                color = color_cycle[loaded % len(color_cycle)]
+                color = color_cycle[int(trip.get("trip_id", loaded)) % len(color_cycle)]
                 lifetime = max(float(trip.get("duration_seconds", 0)), 1.0)
                 
                 # Space out station appearances to animate route growth from start to finish
@@ -738,12 +771,18 @@ class DBManager:
                         if num_stations > 1
                         else 0.0
                     )
+
+                    station_color = color
+                    if station_id == start_station_id:
+                        station_color = start_color
+                    elif station_id == end_station_id:
+                        station_color = end_color
                     
                     session.add(
                         Route(
                             station_id=station_id,
                             station_index=station_idx_map.get(station_id, -1),
-                            color=color,
+                            color=station_color,
                             appear_at=appear_at,
                             lifetime=lifetime,
                             source_trip_id=trip.get("trip_id"),
