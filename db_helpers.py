@@ -74,6 +74,16 @@ def migrate_schema(db_manager):
                 )
             )
             conn.execute(
+                text(
+                    "ALTER TABLE route ADD COLUMN IF NOT EXISTS station_index INTEGER DEFAULT -1"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE route ADD COLUMN IF NOT EXISTS trip_start_at DOUBLE PRECISION DEFAULT 0"
+                )
+            )
+            conn.execute(
                 text("ALTER TABLE route DROP COLUMN IF EXISTS source_started_at")
             )
             conn.execute(
@@ -83,6 +93,11 @@ def migrate_schema(db_manager):
             conn.execute(
                 text(
                     "CREATE INDEX IF NOT EXISTS idx_route_source_trip_id ON route (source_trip_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_route_trip_start_at ON route (trip_start_at)"
                 )
             )
         print("✓ Schema migration completed")

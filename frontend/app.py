@@ -570,6 +570,35 @@ def start_historic_playback():
     load_historic_trip_sample(keep_playing=True)
 
 
+def build_historic_trip_view_data(db, max_trips):
+    """Build trip cards from currently active historic rows in the route table."""
+    _, _, trip_color_map = build_route_station_color_maps(db)
+    active_trip_ids = [
+        group["trip_id"]
+        for group in db.get_route_groups()
+        if group.get("trip_id") is not None
+    ]
+    active_trip_ids = active_trip_ids[:max_trips]
+
+    trips = db.get_trips_by_ids(active_trip_ids)
+    order_map = {trip_id: idx for idx, trip_id in enumerate(active_trip_ids)}
+    trips.sort(key=lambda t: order_map.get(t["trip_id"], 10**9))
+
+    for i, t in enumerate(trips):
+        t["position"] = i
+        t["color"] = trip_color_map.get(t.get("trip_id"), "#FFFFFF")
+        route_geometry, gmaps_duration_seconds = get_historic_trip_route_data(
+            t["start_lat"],
+            t["start_lon"],
+            t["end_lat"],
+            t["end_lon"],
+        )
+        t["route_geometry"] = route_geometry
+        t["gmaps_duration_seconds"] = gmaps_duration_seconds
+        t["gmaps_duration_text"] = format_duration_minutes(gmaps_duration_seconds)
+    return trips
+
+
 def load_historic_trip_sample(keep_playing=True):
     """Load a fresh random set of historic trips for the selected date/time."""
     db = get_db_manager()
@@ -588,70 +617,16 @@ def load_historic_trip_sample(keep_playing=True):
         num_trips=num,
     )
     db.clear_route(set_live=False)
-    
-    # Get candidate trips and enrich with Google Maps paths
-    candidate_trips = db.get_random_trips_in_window(start_dt)
-    if not candidate_trips:
-        st.session_state["historic_playing"] = False
-        st.session_state["historic_no_trips"] = True
-        return
-    
-    # Enrich each trip with Google Maps route path
-    trips_with_paths = []
-    gmaps_client = get_gmaps_client()
-    for trip in candidate_trips[:num]:
-        try:
-            directions = get_directions(
-                (trip["start_lat"], trip["start_lon"]),
-                (trip["end_lat"], trip["end_lon"]),
-                1
-            )
-            if directions and directions.get("features"):
-                feature = directions["features"][0]
-                # Convert GeoJSON [lon, lat] to [lat, lon] for path
-                path = [[lat, lon] for lon, lat in feature["geometry"]["coordinates"]]
-                gmaps_duration = feature.get("properties", {}).get("duration")
-                trips_with_paths.append({
-                    **trip,
-                    "path": path,
-                    "gmaps_duration": gmaps_duration
-                })
-        except Exception as e:
-            print(f"Error fetching Google Maps route for trip {trip.get('trip_id')}: {e}")
-            continue
-    
-    # Load trips with their Google Maps paths
-    loaded = db.load_trips_with_gmaps_paths(trips_with_paths)
+
+    # New DB pipeline: sample and queue trips server-side.
+    loaded = db.load_trips(start_dt, num, start_at_seconds=0.0)
     if loaded == 0:
         st.session_state["historic_playing"] = False if keep_playing else False
         st.session_state["historic_no_trips"] = True
         return
 
-    station_list, station_color_map, trip_color_map = build_route_station_color_maps(db)
-
-    # Fetch exact active trips from route rows so map lines match playback rows.
-    active_trip_ids = [
-        group["trip_id"]
-        for group in db.get_route_groups()
-        if group.get("trip_id") is not None
-    ]
-    active_trip_ids = active_trip_ids[:num]
-    trips = db.get_trips_by_ids(active_trip_ids)
-    order_map = {trip_id: idx for idx, trip_id in enumerate(active_trip_ids)}
-    trips.sort(key=lambda t: order_map.get(t["trip_id"], 10**9))
-
-    for i, t in enumerate(trips):
-        t["position"] = i
-        t["color"] = trip_color_map.get(t.get("trip_id"), "#FFFFFF")
-        route_geometry, gmaps_duration_seconds = get_historic_trip_route_data(
-            t["start_lat"],
-            t["start_lon"],
-            t["end_lat"],
-            t["end_lon"],
-        )
-        t["route_geometry"] = route_geometry
-        t["gmaps_duration_seconds"] = gmaps_duration_seconds
-        t["gmaps_duration_text"] = format_duration_minutes(gmaps_duration_seconds)
+    station_list, station_color_map, _ = build_route_station_color_maps(db)
+    trips = build_historic_trip_view_data(db, num)
 
     st.session_state.update(
         {
@@ -939,6 +914,20 @@ def main():
             st.session_state["historic_no_trips"] = False
 
         if st.session_state.get("historic_playing"):
+            active_trip_ids = [
+                group["trip_id"]
+                for group in db_manager.get_route_groups()
+                if group.get("trip_id") is not None
+            ]
+            session_trip_ids = [
+                t.get("trip_id") for t in st.session_state.get("historic_trips", [])
+            ]
+            if active_trip_ids != session_trip_ids:
+                st.session_state["historic_trips"] = build_historic_trip_view_data(
+                    db_manager,
+                    st.session_state.get("hist_num_trips", 10),
+                )
+
             trips = st.session_state["historic_trips"]
 
             station_trip_map = {}

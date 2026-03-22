@@ -45,7 +45,7 @@ STATION_STATUS_URL = "https://gbfs.lyft.com/gbfs/2.3/bkn/en/station_status.json"
 
 # Distinct colors for historic trip rendering (up to 20 concurrent trips)
 HISTORIC_STATION_THRESHOLD = 200  # meters
-HISTORIC_TRIP_WINDOWS_MINUTES = [30, 60, 120]
+HISTORIC_TRIP_WINDOWS_MINUTES = [1,5,10, 15, 30, 60, 120]
 HISTORIC_TRIP_CANDIDATE_MULTIPLIER = 5
 HISTORIC_TRIP_MAX_QUERY_LIMIT = 20
 HISTORIC_COLORS = [

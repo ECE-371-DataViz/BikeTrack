@@ -139,10 +139,12 @@ class Route(Base):
     station_id: Mapped[str] = mapped_column(
         ForeignKey("stations.station_id"), nullable=False
     )
+    station_index: Mapped[int] = mapped_column(default=-1)
     color: Mapped[str] = mapped_column(nullable=False)
     appear_at: Mapped[float] = mapped_column(default=0.0)
     lifetime: Mapped[float] = mapped_column(default=-1.0)
     source_trip_id: Mapped[Optional[int]] = mapped_column(nullable=True)
+    trip_start_at: Mapped[float] = mapped_column(default=0.0)
     # Relationship
     station: Mapped["Station"] = relationship("Station", back_populates="routes")
 
@@ -155,7 +157,7 @@ class AppMetadata(Base):
     id: Mapped[int] = mapped_column(primary_key=True, default=1)
     last_updated: Mapped[datetime] = mapped_column()
     viewing_timestamp: Mapped[Optional[datetime]] = mapped_column(nullable=True)
-    speed: Mapped[int] = mapped_column(default=1)
+    speed: Mapped[int] = mapped_column(default=30)
     mode: Mapped[int] = mapped_column(default=0)
     num_trips: Mapped[int] = mapped_column(default=10)
 
@@ -258,97 +260,92 @@ class DBManager:
             stations = session.query(Station).all()
             return [station.to_dict() for station in stations]
 
-    def set_route_stations(self, route_stations):
+    def sort_stations_by_distance(self, session, route_stations):
+        """Return route stations sorted by distance from the first station."""
+        if not route_stations:
+            return []
+
+        station_ids = [s["station_id"] for s in route_stations]
+        start_station_id = station_ids[0]
+
+        start_geom_subquery = (
+            session.query(Station.geom)
+            .filter(Station.station_id == start_station_id)
+            .scalar_subquery()
+        )
+
+        ordered_station_ids = [
+            station_id
+            for station_id, in session.query(Station.station_id)
+            .filter(
+                Station.station_id.in_(station_ids),
+                Station.geom.isnot(None),
+            )
+            .order_by(
+                func.ST_Distance(
+                    cast(Station.geom, Geography),
+                    cast(start_geom_subquery, Geography),
+                ),
+                func.array_position(array(station_ids), Station.station_id),
+            )
+            .all()
+        ]
+
+        route_by_station_id = {
+            station_data["station_id"]: station_data for station_data in route_stations
+        }
+        return [
+            route_by_station_id[sid]
+            for sid in ordered_station_ids
+            if sid in route_by_station_id
+        ]
+
+    def _station_index_map(self, session, station_ids):
+        """Map station IDs to LED indices in one query."""
+        if not station_ids:
+            return {}
+        rows = (
+            session.query(Station.station_id, Station.index)
+            .filter(Station.station_id.in_(station_ids))
+            .all()
+        )
+        return {station_id: index for station_id, index in rows}
+
+    def set_route_stations(self, route_stations, trip_time=5.0, speed=1):
         """Write route-finder stations with sequential appear_at times for animation.
         
         Stations appear sequentially from nearest to farthest from the route start.
-        Uses PostGIS distance ordering only (no Python distance fallback).
+        Uses PostGIS distance ordering only
         """
         if not route_stations:
             return
         
         with self.Session_eng() as session:
             session.query(Route).delete()
-            now_ts = time.time()
-            animation_duration = 5.0  # 5 seconds total animation
-
-            station_ids = [s["station_id"] for s in route_stations]
-            start_station_id = station_ids[0]
-            input_order = {sid: i for i, sid in enumerate(station_ids)}
-
-            start_geom_subquery = (
-                session.query(Station.geom)
-                .filter(
-                    Station.station_id == start_station_id,
-                    Station.geom.isnot(None),
-                )
-                .scalar_subquery()
+            animation_duration = max(float(trip_time or 0), 1.0)
+            sorted_stations = self.sort_stations_by_distance(session, route_stations)
+            station_idx_map = self._station_index_map(
+                session,
+                [station_data["station_id"] for station_data in sorted_stations],
             )
-
-            start_station_exists = (
-                session.query(Station.station_id)
-                .filter(
-                    Station.station_id == start_station_id,
-                    Station.geom.isnot(None),
-                )
-                .first()
-            )
-
-            if start_station_exists is None:
-                raise ValueError(
-                    f"Missing PostGIS geometry for start station {start_station_id}"
-                )
-
-            distance_rows = (
-                session.query(
-                    Station.station_id,
-                    func.ST_Distance(
-                        cast(Station.geom, Geography),
-                        cast(start_geom_subquery, Geography),
-                    ).label("distance_m"),
-                )
-                .filter(
-                    Station.station_id.in_(station_ids),
-                    Station.geom.isnot(None),
-                )
-                .all()
-            )
-
-            if len(distance_rows) < len(set(station_ids)):
-                missing = sorted(
-                    set(station_ids) - {station_id for station_id, _ in distance_rows}
-                )
-                raise ValueError(
-                    f"Missing PostGIS geometry for route stations: {', '.join(missing)}"
-                )
-
-            sorted_station_ids = [
-                station_id
-                for station_id, _ in sorted(
-                    distance_rows,
-                    key=lambda t: (float(t[1]), input_order.get(t[0], 10**9)),
-                )
-            ]
-
-            route_by_station_id = {
-                station_data["station_id"]: station_data for station_data in route_stations
-            }
-            sorted_stations = [
-                route_by_station_id[sid]
-                for sid in sorted_station_ids
-                if sid in route_by_station_id
-            ]
 
             num_stations = len(sorted_stations)
             for idx, station_data in enumerate(sorted_stations):
                 # Space out appear_at times so route grows from start to finish
-                appear_at = now_ts + (idx / num_stations) * animation_duration if num_stations > 1 else now_ts
+                appear_at = (
+                    (idx / num_stations) * animation_duration
+                    if num_stations > 1
+                    else 0.0
+                )
+                station_index = station_idx_map.get(station_data["station_id"], -1)
                 
                 route = Route(
                     station_id=station_data["station_id"],
+                    station_index=station_index,
                     color=station_data.get("color", "#ffffff"),
                     appear_at=appear_at,
                     lifetime=animation_duration,
+                    trip_start_at=0.0,
                 )
                 session.add(route)
             self.update_metadata(session, in_type=ROUTE)
@@ -356,37 +353,58 @@ class DBManager:
         print(f"✓ Stored {len(route_stations)} route stations in PostgreSQL with sequential animation")
 
     def get_route_rows(self):
-        """Fetch active route rows joined with station index for rendering."""
+        """Fetch active route rows in renderer-friendly dict format.
+
+        Rows are ordered by effective render time.
+        """
         with self.Session_eng() as session:
-            query = session.query(Route, Station.index).join(
-                Station, Station.station_id == Route.station_id
+            render_time = (Route.trip_start_at + Route.appear_at)
+            rows = (
+                session.query(Route)
+                .order_by(render_time, Route.id)
+                .all()
             )
-            return query.order_by(Route.source_trip_id, Route.id).all()
+            result = []
+            for route in rows:
+                result.append(
+                    {
+                        "id": route.id,
+                        "station_id": route.station_id,
+                        "index": route.station_index,
+                        "color": route.color,
+                        "appear_at": route.appear_at,
+                        "lifetime": route.lifetime,
+                        "source_trip_id": route.source_trip_id,
+                        "trip_start_at": route.trip_start_at,
+                    }
+                )
+            return result
 
     def get_route_groups(self):
         """Return grouped active routes for rendering and playback."""
         rows = self.get_route_rows()
         grouped = {}
-        for route, index in rows:
+        for route in rows:
             group_key = (
-                f"trip:{route.source_trip_id}"
-                if route.source_trip_id is not None
-                else f"route:{route.id}"
+                f"trip:{route['source_trip_id']}"
+                if route["source_trip_id"] is not None
+                else f"route:{route['id']}"
             )
             if group_key not in grouped:
                 grouped[group_key] = {
                     "group_key": group_key,
-                    "maps_to_trip": route.source_trip_id is not None,
-                    "trip_id": route.source_trip_id,
-                    "color": route.color,
-                    "appear_at": route.appear_at,
-                    "lifetime": route.lifetime,
+                    "maps_to_trip": route["source_trip_id"] is not None,
+                    "trip_id": route["source_trip_id"],
+                    "color": route["color"],
+                    "appear_at": route["appear_at"],
+                    "lifetime": route["lifetime"],
+                    "trip_start_at": route["trip_start_at"],
                     "indices": [],
                     "station_ids": [],
                 }
-            if 0 <= index < N_LEDS:
-                grouped[group_key]["indices"].append(index)
-            grouped[group_key]["station_ids"].append(route.station_id)
+            if 0 <= route["index"] < N_LEDS:
+                grouped[group_key]["indices"].append(route["index"])
+            grouped[group_key]["station_ids"].append(route["station_id"])
         return list(grouped.values())
 
     def get_route_station_map(self):
@@ -398,35 +416,152 @@ class DBManager:
                     station_map[station_id] = group["color"]
         return station_map
 
-    def _get_path_station_ids(self, trip):
+    def _get_path_station_ids_session(self, session, trip):
         """Get station IDs on a trip path sorted from start to end using PostGIS."""
+        start_point = func.ST_SetSRID(
+            func.ST_MakePoint(trip["start_lon"], trip["start_lat"]), 4326
+        )
+        end_point = func.ST_SetSRID(
+            func.ST_MakePoint(trip["end_lon"], trip["end_lat"]), 4326
+        )
+        linestring_geom = func.ST_SetSRID(
+            func.ST_MakeLine(array([start_point, end_point])),
+            4326,
+        )
+        linestring_geog = cast(linestring_geom, Geography)
+        locate_expr = func.ST_LineLocatePoint(linestring_geom, Station.geom)
+        rows = (
+            session.query(Station.station_id, locate_expr.label("path_pos"))
+            .filter(
+                Station.geom.isnot(None),
+                func.ST_DWithin(
+                    cast(Station.geom, Geography),
+                    linestring_geog,
+                    HISTORIC_STATION_THRESHOLD,
+                ),
+            )
+            .order_by(locate_expr)
+            .all()
+        )
+        return [station_id for station_id, _ in rows]
+
+    def _get_path_station_ids(self, trip):
         with self.Session_eng() as session:
-            start_point = func.ST_SetSRID(
-                func.ST_MakePoint(trip["start_lon"], trip["start_lat"]), 4326
-            )
-            end_point = func.ST_SetSRID(
-                func.ST_MakePoint(trip["end_lon"], trip["end_lat"]), 4326
-            )
-            linestring_geom = func.ST_SetSRID(
-                func.ST_MakeLine(array([start_point, end_point])),
-                4326,
-            )
-            linestring_geog = cast(linestring_geom, Geography)
-            locate_expr = func.ST_LineLocatePoint(linestring_geom, Station.geom)
-            rows = (
-                session.query(Station.station_id, locate_expr.label("path_pos"))
-                .filter(
-                    Station.geom.isnot(None),
-                    func.ST_DWithin(
-                        cast(Station.geom, Geography),
-                        linestring_geog,
-                        HISTORIC_STATION_THRESHOLD,
-                    ),
+            return self._get_path_station_ids_session(session, trip)
+
+    def _get_random_trips_in_window_session(self, session, timestamp, target_count):
+        """Session-local random trip query around a timestamp."""
+        StartStation = aliased(Station)
+        EndStation = aliased(Station)
+
+        target = max(1, int(target_count or 1))
+        limit = min(
+            HISTORIC_TRIP_MAX_QUERY_LIMIT,
+            target * HISTORIC_TRIP_CANDIDATE_MULTIPLIER,
+        )
+
+        trips = []
+        for minutes in HISTORIC_TRIP_WINDOWS_MINUTES:
+            window_start = timestamp - timedelta(minutes=minutes)
+            window_end = timestamp + timedelta(minutes=minutes)
+            trips = (
+                session.query(TripData, StartStation, EndStation)
+                .join(
+                    StartStation,
+                    StartStation.short_name == TripData.start_station_id,
                 )
-                .order_by(locate_expr)
+                .join(EndStation, EndStation.short_name == TripData.end_station_id)
+                .filter(
+                    TripData.started_at >= window_start,
+                    TripData.started_at < window_end,
+                )
+                .order_by(func.random())
+                .limit(limit)
                 .all()
             )
-            return [station_id for station_id, _ in rows]
+            if trips:
+                break
+
+        result = []
+        for trip, start_stn, end_stn in trips:
+            duration = (trip.ended_at - trip.started_at).total_seconds()
+            if duration <= 0:
+                continue
+            result.append(
+                {
+                    "trip_id": trip.id,
+                    "started_at": trip.started_at,
+                    "ended_at": trip.ended_at,
+                    "duration_seconds": duration,
+                    "rideable_type": trip.rideable_type,
+                    "start_station_id": start_stn.station_id,
+                    "start_station_name": start_stn.name,
+                    "start_lat": start_stn.latitude,
+                    "start_lon": start_stn.longitude,
+                    "end_station_id": end_stn.station_id,
+                    "end_station_name": end_stn.name,
+                    "end_lat": end_stn.latitude,
+                    "end_lon": end_stn.longitude,
+                }
+            )
+        return result
+
+    def _insert_historic_trip_rows(
+        self,
+        session,
+        candidate_trips,
+        target_count,
+        trip_start_at,
+    ):
+        """Insert up to target_count historic trips and return inserted count."""
+        existing_trip_ids = {
+            row[0]
+            for row in session.query(Route.source_trip_id)
+            .filter(Route.lifetime >= 0, Route.source_trip_id.isnot(None))
+            .all()
+        }
+        loaded = 0
+        color_cycle = HISTORIC_COLORS
+        color_seed = len(existing_trip_ids)
+
+        for trip in candidate_trips:
+            if loaded >= target_count:
+                break
+            if trip["trip_id"] in existing_trip_ids:
+                continue
+
+            station_ids = self._get_path_station_ids_session(session, trip)
+            if not station_ids:
+                continue
+
+            station_idx_map = self._station_index_map(session, station_ids)
+            color = color_cycle[(color_seed + loaded) % len(color_cycle)]
+            lifetime = max(float(trip["duration_seconds"]), 1.0)
+            num_stations = len(station_ids)
+
+            for station_idx, station_id in enumerate(station_ids):
+                appear_at = (
+                    (station_idx / num_stations) * lifetime
+                    if num_stations > 1
+                    else 0.0
+                )
+
+                session.add(
+                    Route(
+                        station_id=station_id,
+                        station_index=station_idx_map.get(station_id, -1),
+                        color=color,
+                        appear_at=appear_at,
+                        lifetime=lifetime,
+                        source_trip_id=trip["trip_id"],
+                        trip_start_at=float(trip_start_at),
+                    )
+                )
+
+            existing_trip_ids.add(trip["trip_id"])
+            loaded += 1
+
+        return loaded
 
     def clear_route(self, set_live=True):
         """Clear all active route rows."""
@@ -436,7 +571,7 @@ class DBManager:
                 self.update_metadata(session, in_type=LIVE)
             session.commit()
 
-    def load_trips(self, timestamp, N_trips):
+    def load_trips(self, timestamp, N_trips, start_at_seconds=0.0):
         """Queue N historic trips around a timestamp into the route table."""
         if timestamp is None:
             return 0
@@ -445,61 +580,20 @@ class DBManager:
         if target_count == 0:
             return 0
 
-        meta = self.get_metadata()
-        speed = (meta.speed if meta and meta.speed else 100) or 100
-        now_ts = time.time()
-
-        candidate_trips = self.get_random_trips_in_window(timestamp)
-
-        if not candidate_trips:
-            return 0
-
         with self.Session_eng() as session:
-            existing_trip_ids = {
-                row[0]
-                for row in session.query(Route.source_trip_id)
-                .filter(Route.lifetime >= 0, Route.source_trip_id.isnot(None))
-                .all()
-            }
-            loaded = 0
-            if not HISTORIC_COLORS:
-                color_cycle = ["#FFFFFF"]
-            else:
-                color_cycle = HISTORIC_COLORS
-
-            for trip in candidate_trips:
-                if loaded >= target_count:
-                    break
-                if trip["trip_id"] in existing_trip_ids:
-                    continue
-
-                station_ids = self._get_path_station_ids(trip)
-                if not station_ids:
-                    continue
-
-                # Assign highly distinct colors before repeating.
-                color = color_cycle[loaded % len(color_cycle)]
-                lifetime = max(trip["duration_seconds"] / speed, 3.0)
-
-                # Space out station appearances to animate route growth from start to finish
-                num_stations = len(station_ids)
-                for station_idx, station_id in enumerate(station_ids):
-                    # Each station appears at a different time for animation
-                    # appear_at = now_ts + (station_idx / num_stations) * lifetime
-                    appear_at = now_ts + (station_idx / num_stations) * lifetime if num_stations > 1 else now_ts
-                    
-                    session.add(
-                        Route(
-                            station_id=station_id,
-                            color=color,
-                            appear_at=appear_at,
-                            lifetime=lifetime,
-                            source_trip_id=trip["trip_id"],
-                        )
-                    )
-
-                existing_trip_ids.add(trip["trip_id"])
-                loaded += 1
+            meta = session.get(AppMetadata, 1)
+            trip_start_at = float(start_at_seconds or 0.0)
+            candidate_trips = self._get_random_trips_in_window_session(
+                session,
+                timestamp,
+                target_count,
+            )
+            loaded = self._insert_historic_trip_rows(
+                session,
+                candidate_trips,
+                target_count,
+                trip_start_at,
+            )
 
             if loaded:
                 self.update_metadata(
@@ -513,7 +607,80 @@ class DBManager:
             session.commit()
             return loaded
 
-    def load_trips_with_gmaps_paths(self, trips_with_paths):
+    def historic_tick(self, base_viewing_timestamp, trip_time, linger_seconds=5.0):
+        """Single historic queue/update call for remote DB efficiency.
+
+        Removes expired trips, inserts one replacement per removed trip, and returns
+        current historic rows with current mode/speed.
+        """
+        with self.Session_eng() as session:
+            meta = session.get(AppMetadata, 1)
+            if meta is None:
+                return LIVE, 1, []
+
+            speed = max(1, int(meta.speed or 1))
+            if meta.mode != HISTORIC:
+                return meta.mode, speed, []
+
+            linger_virtual = float(linger_seconds) * speed
+            completion_expr = func.max(Route.trip_start_at + Route.lifetime)
+            completed_rows = (
+                session.query(Route.source_trip_id, completion_expr.label("complete_at"))
+                .filter(Route.source_trip_id.isnot(None))
+                .group_by(Route.source_trip_id)
+                .having(completion_expr <= float(trip_time) - linger_virtual)
+                .all()
+            )
+
+            for source_trip_id, complete_at in completed_rows:
+                if source_trip_id is None:
+                    continue
+
+                session.query(Route).filter(
+                    Route.source_trip_id == int(source_trip_id)
+                ).delete(synchronize_session=False)
+
+                replacement_start = float(complete_at or 0.0) + linger_virtual
+                replacement_timestamp = (
+                    base_viewing_timestamp + timedelta(seconds=replacement_start)
+                )
+                candidates = self._get_random_trips_in_window_session(
+                    session,
+                    replacement_timestamp,
+                    1,
+                )
+                self._insert_historic_trip_rows(
+                    session,
+                    candidates,
+                    1,
+                    replacement_start,
+                )
+
+            rows = (
+                session.query(Route)
+                .filter(Route.source_trip_id.isnot(None))
+                .order_by(Route.trip_start_at + Route.appear_at, Route.id)
+                .all()
+            )
+            session.commit()
+
+            result = []
+            for route in rows:
+                result.append(
+                    {
+                        "id": route.id,
+                        "station_id": route.station_id,
+                        "index": route.station_index,
+                        "color": route.color,
+                        "appear_at": route.appear_at,
+                        "lifetime": route.lifetime,
+                        "source_trip_id": route.source_trip_id,
+                        "trip_start_at": route.trip_start_at,
+                    }
+                )
+            return HISTORIC, speed, result
+
+    def load_trips_with_gmaps_paths(self, trips_with_paths, start_at_seconds=0.0):
         """Load historic trips using pre-calculated Google Maps paths.
         
         This finds stations along the actual Google Maps bicycling route,
@@ -528,8 +695,7 @@ class DBManager:
             return 0
         
         meta = self.get_metadata()
-        speed = (meta.speed if meta and meta.speed else 100) or 100
-        now_ts = time.time()
+        trip_start_at = float(start_at_seconds or 0.0)
         
         with self.Session_eng() as session:
             existing_trip_ids = {
@@ -558,23 +724,30 @@ class DBManager:
                 if not stations_info:
                     continue
                 station_ids = [s["station_id"] for s in stations_info]
+                station_idx_map = self._station_index_map(session, station_ids)
                 
                 # Assign highly distinct colors before repeating.
                 color = color_cycle[loaded % len(color_cycle)]
-                lifetime = max(trip.get("duration_seconds", 0) / speed, 3.0)
+                lifetime = max(float(trip.get("duration_seconds", 0)), 1.0)
                 
                 # Space out station appearances to animate route growth from start to finish
                 num_stations = len(station_ids)
                 for station_idx, station_id in enumerate(station_ids):
-                    appear_at = now_ts + (station_idx / num_stations) * lifetime if num_stations > 1 else now_ts
+                    appear_at = (
+                        (station_idx / num_stations) * lifetime
+                        if num_stations > 1
+                        else 0.0
+                    )
                     
                     session.add(
                         Route(
                             station_id=station_id,
+                            station_index=station_idx_map.get(station_id, -1),
                             color=color,
                             appear_at=appear_at,
                             lifetime=lifetime,
                             source_trip_id=trip.get("trip_id"),
+                            trip_start_at=trip_start_at,
                         )
                     )
                 
@@ -723,6 +896,12 @@ class DBManager:
             now_ts = time.time()
             stations_to_write = []
             animation_duration = 5.0  # 5 seconds total animation
+
+            all_station_ids = []
+            for stat in route_stats:
+                if "route_stations" in stat and not stat["route_stations"].empty:
+                    all_station_ids.extend([str(sid) for sid in stat["route_stations"]["station_id"]])
+            station_idx_map = self._station_index_map(session, all_station_ids)
             
             for idx, stat in enumerate(route_stats):
                 should_include = (selected_route is None) or (selected_route == idx)
@@ -738,12 +917,19 @@ class DBManager:
                     # Vectorized conversion with sequential appear_at times
                     for station_idx, sid in enumerate(df["station_id"]):
                         # Space out appear_at times so route grows from start to finish
-                        appear_at = now_ts + (station_idx / num_stations) * animation_duration if num_stations > 1 else now_ts
+                        appear_at = (
+                            (station_idx / num_stations) * animation_duration
+                            if num_stations > 1
+                            else 0.0
+                        )
+                        sid_str = str(sid)
                         stations_to_write.append({
-                            "station_id": str(sid),
+                            "station_id": sid_str,
+                            "station_index": station_idx_map.get(sid_str, -1),
                             "color": color,
                             "appear_at": appear_at,
                             "lifetime": animation_duration,
+                            "trip_start_at": 0.0,
                         })
 
             # Bulk insert using bulk_insert_mappings for better performance
@@ -780,63 +966,10 @@ class DBManager:
         Returns:
             List of dicts with trip info and start/end station coordinates.
         """
-        StartStation = aliased(Station)
-        EndStation = aliased(Station)
-
-        meta = self.get_metadata()
-        target = max(1, int((meta.num_trips if meta else 1) or 1))
-        limit = min(
-            HISTORIC_TRIP_MAX_QUERY_LIMIT,
-            target * HISTORIC_TRIP_CANDIDATE_MULTIPLIER,
-        )
-
         with self.Session_eng() as session:
-            trips = []
-            for minutes in HISTORIC_TRIP_WINDOWS_MINUTES:
-                window_start = timestamp - timedelta(minutes=minutes)
-                window_end = timestamp + timedelta(minutes=minutes)
-                trips = (
-                    session.query(TripData, StartStation, EndStation)
-                    .join(
-                        StartStation,
-                        StartStation.short_name == TripData.start_station_id,
-                    )
-                    .join(EndStation, EndStation.short_name == TripData.end_station_id)
-                    .filter(
-                        TripData.started_at >= window_start,
-                        TripData.started_at < window_end,
-                    )
-                    .order_by(func.random())
-                    .limit(limit)
-                    .all()
-                )
-                if trips:
-                    break
-
-            result = []
-            for trip, start_stn, end_stn in trips:
-                duration = (trip.ended_at - trip.started_at).total_seconds()
-                if duration <= 0:
-                    continue
-                result.append(
-                    {
-                        "trip_id": trip.id,
-                        "started_at": trip.started_at,
-                        "ended_at": trip.ended_at,
-                        "duration_seconds": duration,
-                        "rideable_type": trip.rideable_type,
-                        "start_station_id": start_stn.station_id,
-                        "start_station_name": start_stn.name,
-                        "start_lat": start_stn.latitude,
-                        "start_lon": start_stn.longitude,
-                        "end_station_id": end_stn.station_id,
-                        "end_station_name": end_stn.name,
-                        "end_lat": end_stn.latitude,
-                        "end_lon": end_stn.longitude,
-                    }
-                )
-
-            return result
+            meta = session.get(AppMetadata, 1)
+            target = max(1, int((meta.num_trips if meta else 1) or 1))
+            return self._get_random_trips_in_window_session(session, timestamp, target)
 
     def get_trips_by_ids(self, trip_ids):
         """Get trip details for an explicit set of trip IDs."""
@@ -887,6 +1020,7 @@ class DBManager:
 if __name__ == "__main__":
     # For one-time setup tasks, use db_helpers
     manager = DBManager(DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD)
+    Base.metadata.create_all(manager.engine)
 
     manager.update_metadata(in_type=LIVE)
     last_s3 = datetime.now()
