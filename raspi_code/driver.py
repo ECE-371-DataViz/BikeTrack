@@ -251,6 +251,43 @@ def fade_leds(led_updates, speed=FADE_DURATION_SECONDS, steps=5):
             time.sleep(step_delay)
 
 
+def _led_color_at(index):
+    """Read current LED color for PI and mock strip implementations."""
+    if PI:
+        return tuple(int(c) for c in LEDS[index])
+    return tuple(int(c) for c in LEDS.leds[index])
+
+
+def _apply_historic_fades(fading_trips, trip_time):
+    """Apply in-progress historic fade-outs for this frame and return completed trip ids."""
+    if not fading_trips:
+        return []
+
+    completed = []
+    changed = False
+    for trip_id, fade_state in fading_trips.items():
+        duration = max(fade_state["duration"], 1e-6)
+        progress = (trip_time - fade_state["start_at"]) / duration
+        progress = max(0.0, min(1.0, progress))
+        keep = 1.0 - progress
+
+        for index, start_color in fade_state["start_colors"].items():
+            LEDS[index] = (
+                int(start_color[0] * keep),
+                int(start_color[1] * keep),
+                int(start_color[2] * keep),
+            )
+            changed = True
+
+        if progress >= 1.0:
+            completed.append(trip_id)
+
+    if changed:
+        LEDS.show()
+
+    return completed
+
+
 def render_routes(route_stations, trip_time, cur_indx, fade_speed=FADE_DURATION_SECONDS):
     # Assume route stations is ordered by render time
     led_updates = []
@@ -311,6 +348,7 @@ def historic_mode(meta):
     cur_indx = 0
     frame_count = 0
     last_print_time = 0
+    fading_trips = {}
 
     while True:
         now = time.time()
@@ -324,19 +362,43 @@ def historic_mode(meta):
             print(f"[HISTORIC_MODE] Frame {frame_count}, trip_time={trip_time:.2f}s, {active_trips} active trips, cur_indx={cur_indx}")
             last_print_time = now
 
-        ended_trip_id = None
-        ended_state = None
         for trip_id, state in trip_state.items():
-            if trip_time >= state["complete_at"] + linger_virtual:
-                ended_trip_id = trip_id
-                ended_state = state
-                break
+            if trip_id in fading_trips:
+                continue
+            if trip_time < state["complete_at"]:
+                continue
 
-        if ended_trip_id is None:
+            start_colors = {}
+            for idx in state["indices"]:
+                if 0 <= idx < N_LEDS:
+                    start_colors[idx] = _led_color_at(idx)
+
+            if not start_colors:
+                continue
+
+            fading_trips[trip_id] = {
+                "start_at": state["complete_at"],
+                "duration": linger_virtual,
+                "start_colors": start_colors,
+            }
+            print(
+                f"[HISTORIC_MODE] Trip {trip_id} complete at {trip_time:.2f}s. "
+                f"Starting non-blocking fade over {linger_virtual:.2f}s virtual time..."
+            )
+
+        completed_trips = _apply_historic_fades(fading_trips, trip_time)
+        if not completed_trips:
             time.sleep(0.01)
             continue
 
-        print(f"[HISTORIC_MODE] Trip {ended_trip_id} complete at {trip_time:.2f}s. Removing and loading replacement...")
+        ended_trip_id = completed_trips[0]
+        ended_state = trip_state.get(ended_trip_id)
+        fading_trips.pop(ended_trip_id, None)
+        if ended_state is None:
+            time.sleep(0.01)
+            continue
+
+        print(f"[HISTORIC_MODE] Trip {ended_trip_id} fade complete at {trip_time:.2f}s. Removing and loading replacement...")
         db_manager.remove_trip(ended_trip_id)
 
         replacement_start = ended_state["complete_at"] + linger_virtual
@@ -364,10 +426,16 @@ def historic_mode(meta):
             clear_all_leds()
             break
 
+        # Remove stale fade states that no longer exist after refresh.
+        fading_trips = {
+            tid: state for tid, state in fading_trips.items() if tid in trip_state
+        }
+
         print(f"[HISTORIC_MODE] Refreshed snapshot: {len(stations)} stations, instantaneously rendering...")
         # After DB refresh, restore current visible state instantly and only fade
         # genuinely new stations from this point onward.
         cur_indx = render_visible_instant(stations, trip_time)
+        _apply_historic_fades(fading_trips, trip_time)
 
 
 # Blinks them, and then leaves them on the last color
