@@ -1,6 +1,6 @@
 
 import csv
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 from postgres_manager import DBManager
 from globals import *
@@ -157,14 +157,79 @@ def live_mode(current_state):
 # As such, we can just multiply the render time by start to get the appear_at time.
 
 HISTORIC_LINGER_SECONDS = 5
+FADE_DURATION_SECONDS = 0.1
 
 
 def _render_at(station_row):
     return station_row["trip_start_at"] + station_row["appear_at"]
 
 
-def render_routes(route_stations, trip_time, cur_indx):
+def _trip_complete_at(station_row):
+    return station_row["trip_start_at"] + station_row["lifetime"]
+
+
+def _historic_snapshot():
+    stations = [
+        row
+        for row in db_manager.get_route_rows()
+        if row.get("source_trip_id") is not None
+    ]
+    trip_state = {}
+    for row in stations:
+        trip_id = row.get("source_trip_id")
+        if trip_id is None:
+            continue
+        entry = trip_state.setdefault(
+            trip_id,
+            {
+                "complete_at": _trip_complete_at(row),
+                "indices": set(),
+            },
+        )
+        entry["complete_at"] = max(entry["complete_at"], _trip_complete_at(row))
+        idx = row.get("index", -1)
+        if 0 <= idx < N_LEDS:
+            entry["indices"].add(idx)
+    return stations, trip_state
+
+
+def fade_leds(led_updates, speed=FADE_DURATION_SECONDS, steps=5):
+    """Fade a list of (index, target_color) updates in over `speed` seconds."""
+    if not led_updates:
+        return
+
+    steps = max(1, int(steps))
+    step_delay = max(0.0, float(speed)) / steps
+
+    start_colors = {}
+    for index, _ in led_updates:
+        if not (0 <= index < N_LEDS):
+            continue
+        if PI:
+            start_colors[index] = tuple(int(c) for c in LEDS[index])
+        else:
+            start_colors[index] = tuple(int(c) for c in LEDS.leds[index])
+
+    for step in range(1, steps + 1):
+        t = step / steps
+        for index, target_color in led_updates:
+            if index not in start_colors:
+                continue
+            start_color = start_colors[index]
+            blended = (
+                int(start_color[0] + (target_color[0] - start_color[0]) * t),
+                int(start_color[1] + (target_color[1] - start_color[1]) * t),
+                int(start_color[2] + (target_color[2] - start_color[2]) * t),
+            )
+            LEDS[index] = blended
+        LEDS.show()
+        if step_delay > 0:
+            time.sleep(step_delay)
+
+
+def render_routes(route_stations, trip_time, cur_indx, fade_speed=FADE_DURATION_SECONDS):
     # Assume route stations is ordered by render time
+    led_updates = []
     while cur_indx < len(route_stations) and _render_at(route_stations[cur_indx]) <= trip_time:
         station = route_stations[cur_indx]
         index = station["index"]
@@ -172,9 +237,11 @@ def render_routes(route_stations, trip_time, cur_indx):
             cur_indx += 1
             continue
         color = hex_to_rgb(station["color"])
-        LEDS[index] = color
+        led_updates.append((index, color))
         cur_indx += 1
-    LEDS.show()
+
+    if led_updates:
+        fade_leds(led_updates, speed=fade_speed)
     return cur_indx
 
 
@@ -197,25 +264,62 @@ def historic_mode(meta):
     speed = meta.speed or 30
     base_viewing_timestamp = meta.viewing_timestamp or datetime.now()
     start_time = time.time()
+    linger_virtual = HISTORIC_LINGER_SECONDS * speed
+
+    stations, trip_state = _historic_snapshot()
+    if not stations:
+        clear_all_leds()
+        return
+
+    clear_all_leds()
+    cur_indx = 0
 
     while True:
         now = time.time()
         trip_time = (now - start_time) * speed
-        mode, speed, stations = db_manager.historic_tick(
-            base_viewing_timestamp,
-            trip_time,
-            HISTORIC_LINGER_SECONDS,
-        )
-        if mode != HISTORIC:
-            break
-        if not stations:
-            clear_all_leds()
-            time.sleep(0.05)
+        cur_indx = render_routes(stations, trip_time, cur_indx)
+
+        ended_trip_id = None
+        ended_state = None
+        for trip_id, state in trip_state.items():
+            if trip_time >= state["complete_at"] + linger_virtual:
+                ended_trip_id = trip_id
+                ended_state = state
+                break
+
+        if ended_trip_id is None:
+            time.sleep(0.01)
             continue
 
+        for idx in ended_state["indices"]:
+            LEDS[idx] = COLOR_MAP["blank"]
+        LEDS.show()
+
+        db_manager.remove_trip(ended_trip_id)
+
+        replacement_start = ended_state["complete_at"] + linger_virtual
+        replacement_timestamp = (
+            base_viewing_timestamp + timedelta(seconds=replacement_start)
+        )
+        db_manager.load_trips(
+            replacement_timestamp,
+            1,
+            start_at_seconds=replacement_start,
+        )
+
+        refreshed_meta = db_manager.get_metadata()
+        if refreshed_meta.mode != HISTORIC:
+            break
+        speed = refreshed_meta.speed or speed
+        linger_virtual = HISTORIC_LINGER_SECONDS * speed
+
+        stations, trip_state = _historic_snapshot()
+        if not stations:
+            clear_all_leds()
+            break
+
         clear_all_leds()
-        render_routes(stations, trip_time, 0)
-        time.sleep(0.05)
+        cur_indx = render_routes(stations, trip_time, 0)
 
 
 # Blinks them, and then leaves them on the last color
