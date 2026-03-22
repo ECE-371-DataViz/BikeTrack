@@ -193,6 +193,22 @@ def _historic_snapshot():
     return stations, trip_state
 
 
+def render_visible_instant(route_stations, trip_time):
+    """Render all currently visible route rows immediately (no fade)."""
+    clear_all_leds()
+    next_index = 0
+    for idx, station in enumerate(route_stations):
+        if _render_at(station) > trip_time:
+            next_index = idx
+            break
+        led_index = station.get("index", -1)
+        if 0 <= led_index < N_LEDS:
+            LEDS[led_index] = hex_to_rgb(station["color"])
+        next_index = idx + 1
+    LEDS.show()
+    return next_index
+
+
 def fade_leds(led_updates, speed=FADE_DURATION_SECONDS, steps=5):
     """Fade a list of (index, target_color) updates in over `speed` seconds."""
     if not led_updates:
@@ -291,10 +307,6 @@ def historic_mode(meta):
             time.sleep(0.01)
             continue
 
-        for idx in ended_state["indices"]:
-            LEDS[idx] = COLOR_MAP["blank"]
-        LEDS.show()
-
         db_manager.remove_trip(ended_trip_id)
 
         replacement_start = ended_state["complete_at"] + linger_virtual
@@ -318,8 +330,9 @@ def historic_mode(meta):
             clear_all_leds()
             break
 
-        clear_all_leds()
-        cur_indx = render_routes(stations, trip_time, 0)
+        # After DB refresh, restore current visible state instantly and only fade
+        # genuinely new stations from this point onward.
+        cur_indx = render_visible_instant(stations, trip_time)
 
 
 # Blinks them, and then leaves them on the last color
