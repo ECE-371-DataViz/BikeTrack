@@ -182,7 +182,7 @@ def render_routes(
     use station coordinates & build a detailed popup. Otherwise fall back to
     the supplied start/end coordinates.
     """
-    start_color = "green" if route_type == "ebikes" else "blue"
+    start_color = "green" if route_type == "ebike" else "blue"
     start_location = start
     end_location = end
 
@@ -370,17 +370,8 @@ def get_directions(o, d, num_routes):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_historic_trip_route_data(start_lat, start_lon, end_lat, end_lon):
-    """Fetch one Google Maps bicycling route and duration for a historic trip."""
-    directions = get_directions((start_lat, start_lon), (end_lat, end_lon), 1)
-    if not directions or not directions.get("features"):
-        return [], None
-
-    feature = directions["features"][0]
-    coordinates = feature["geometry"]["coordinates"]
-    # Convert GeoJSON [lon, lat] pairs into Folium [lat, lon] pairs.
-    route_geometry = [[lat, lon] for lon, lat in coordinates]
-    gmaps_duration_seconds = feature.get("properties", {}).get("duration")
-    return route_geometry, gmaps_duration_seconds
+    """Build a lightweight direct segment for historic trip visualization."""
+    return [[start_lat, start_lon], [end_lat, end_lon]]
 
 
 def format_duration_minutes(duration_seconds):
@@ -510,10 +501,27 @@ def build_route_station_color_maps(db_manager):
     station_color_map = db_manager.get_route_station_map()
     trip_color_map = {}
 
-    for group in db_manager.get_route_groups():
-        trip_id = group.get("trip_id")
-        if trip_id is not None and trip_id not in trip_color_map:
-            trip_color_map[trip_id] = group["color"]
+    # Select the dominant non-endpoint color for each trip so UI colors match
+    # the actual trip body color stored in route rows.
+    endpoint_colors = {"#00FF00", "#0000FF", "#FF0000"}
+    trip_rows = {}
+    for row in db_manager.get_route_rows():
+        trip_id = row.get("source_trip_id")
+        if trip_id is None:
+            continue
+        trip_rows.setdefault(trip_id, []).append(row.get("color", "#FFFFFF"))
+
+    for trip_id, colors in trip_rows.items():
+        normalized = [str(c).upper() for c in colors if c]
+        non_endpoint = [c for c in normalized if c not in endpoint_colors]
+        candidates = non_endpoint if non_endpoint else normalized
+        if not candidates:
+            continue
+
+        freq = {}
+        for color in candidates:
+            freq[color] = freq.get(color, 0) + 1
+        trip_color_map[trip_id] = max(freq, key=freq.get)
 
     return station_list, station_color_map, trip_color_map
 
@@ -535,7 +543,7 @@ def render_route_station_colors(m, station_list, station_color_map, station_trip
             for trip in station_trip_map[sid][:3]:
                 popup_lines.append(
                     f"🧭 Route: {trip['start_station_name']} → {trip['end_station_name']}<br>"
-                    f"⏱️ Google Maps Time: {trip['gmaps_duration_text']}"
+                    f"⏱️ Trip Time: {trip.get('trip_duration_text', 'Unavailable')}"
                 )
         else:
             popup_lines.append("🧭 Active route station")
@@ -587,15 +595,15 @@ def build_historic_trip_view_data(db, max_trips):
     for i, t in enumerate(trips):
         t["position"] = i
         t["color"] = trip_color_map.get(t.get("trip_id"), "#FFFFFF")
-        route_geometry, gmaps_duration_seconds = get_historic_trip_route_data(
+        route_geometry = get_historic_trip_route_data(
             t["start_lat"],
             t["start_lon"],
             t["end_lat"],
             t["end_lon"],
         )
         t["route_geometry"] = route_geometry
-        t["gmaps_duration_seconds"] = gmaps_duration_seconds
-        t["gmaps_duration_text"] = format_duration_minutes(gmaps_duration_seconds)
+        t["trip_duration_seconds"] = t.get("duration_seconds")
+        t["trip_duration_text"] = format_duration_minutes(t.get("duration_seconds"))
     return trips
 
 
@@ -695,6 +703,14 @@ def init_session_states():
         st.session_state["app_mode"] = "General View"  # Default mode
     if "historic_trips" not in st.session_state:
         st.session_state["historic_trips"] = []
+    if "hist_date" not in st.session_state:
+        st.session_state["hist_date"] = datetime(2025, 9, 15).date()
+    if "hist_time" not in st.session_state:
+        st.session_state["hist_time"] = datetime(2025, 9, 15, 8, 0).time()
+    if "hist_speed" not in st.session_state:
+        st.session_state["hist_speed"] = 100
+    if "hist_num_trips" not in st.session_state:
+        st.session_state["hist_num_trips"] = 10
 
 
 def main():
@@ -764,7 +780,7 @@ def main():
         route_speed = st.sidebar.slider(
             "Route Playback Speed (x real-time)",
             min_value=1,
-            max_value=200,
+            max_value=60,
             value=15,
             step=1,
             on_change=reset_run_keep_points,
@@ -809,13 +825,11 @@ def main():
         st.sidebar.subheader("Historic Trip Playback")
         st.sidebar.date_input(
             "Start Date",
-            value=datetime(2025, 9, 15).date(),
             key="hist_date",
             on_change=on_historic_settings_changed,
         )
         st.sidebar.time_input(
             "Start Time",
-            value=datetime(2025, 9, 15, 8, 0).time(),
             key="hist_time",
             on_change=on_historic_settings_changed,
         )
@@ -823,16 +837,15 @@ def main():
             "Playback Speed (x real-time)",
             min_value=10,
             max_value=500,
-            value=100,
             step=10,
             key="hist_speed",
             on_change=on_historic_settings_changed,
         )
+
         st.sidebar.number_input(
             "Number of Trips",
             min_value=1,
             max_value=20,
-            value=10,
             step=1,
             key="hist_num_trips",
             on_change=on_historic_settings_changed,
@@ -997,7 +1010,7 @@ def main():
                     <b style="font-size: 15px;">🟢 {t['start_station_name']}</b><br>
                     <hr style="margin: 6px 0;">
                     ➡️ To: {t['end_station_name']}<br>
-                    ⏱️ Google Maps Time: {t.get('gmaps_duration_text', format_duration_minutes(None))}<br>
+                    ⏱️ Trip Time: {t.get('trip_duration_text', format_duration_minutes(None))}<br>
                     🚲 Bike Type: {bike_label}
                 </div>
                 """
@@ -1012,7 +1025,7 @@ def main():
                     popup=folium.Popup(start_popup_html, max_width=350),
                 ).add_to(m)
                 
-                # Render the full Google Maps bicycling route geometry
+                # Render a lightweight direct dashed connector.
                 route_geometry = t.get("route_geometry") or []
                 if len(route_geometry) >= 2:
                     folium.PolyLine(
@@ -1039,7 +1052,7 @@ def main():
                     <b style="font-size: 15px;">🔴 {t['end_station_name']}</b><br>
                     <hr style="margin: 6px 0;">
                     ⬅️ From: {t['start_station_name']}<br>
-                    ⏱️ Google Maps Time: {t.get('gmaps_duration_text', format_duration_minutes(None))}<br>
+                    ⏱️ Trip Time: {t.get('trip_duration_text', format_duration_minutes(None))}<br>
                     🚲 Bike Type: {bike_label}
                 </div>
                 """
@@ -1079,7 +1092,7 @@ def main():
                     "#": t["position"] + 1,
                     "From": t["start_station_name"][:30],
                     "To": t["end_station_name"][:30],
-                    "Google Maps Time": t.get("gmaps_duration_text", "Unavailable"),
+                    "Trip Time": t.get("trip_duration_text", "Unavailable"),
                     "Type": t.get("rideable_type", ""),
                 }
             )
