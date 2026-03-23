@@ -381,7 +381,7 @@ def historic_mode(meta):
         ended_trip_id = None
         ended_state = None
         for trip_id, state in trip_state.items():
-            if trip_time >= state["complete_at"]:
+            if trip_time >= state["complete_at"] + linger_virtual:
                 ended_trip_id = trip_id
                 ended_state = state
                 break
@@ -401,7 +401,11 @@ def historic_mode(meta):
         print(f"[HISTORIC_MODE] Trip {ended_trip_id} fade complete at {trip_time:.2f}s. Removing and loading replacement...")
         db_manager.remove_trip(ended_trip_id)
 
-        replacement_start = ended_state["complete_at"] + FADE_DURATION_SECONDS
+        replacement_start = (
+            ended_state["complete_at"]
+            + linger_virtual
+            + FADE_DURATION_SECONDS
+        )
         replacement_timestamp = (
             base_viewing_timestamp + timedelta(seconds=replacement_start)
         )
